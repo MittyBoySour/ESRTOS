@@ -64,76 +64,47 @@ typedef struct SamplerThreadData
  *
  */
 
-static TFrequencyData FrequencyData;
-static TPassSampleData PassSampleData;
-static TPITData PITData;
-static TAnalyzerData AnalyzerData[NB_SAMPLER_CHANNELS];
-static TSampleManagerData SamplerManagerData;
+volatile extern static TPassSampleData PassSampleData;
+volatile extern static TPITData PITData;
+volatile extern static TAnalyzerThreadData AnalyzerThreadData[NB_SAMPLER_CHANNELS];
 
 // Global data
 static bool InverseTimingModeEnabled;
+static float Frequency; // possibly needs to be float
 
-Sampler_Init(const uint32_t moduleClk) // May have to be thread
+Sampler_Init(const uint32_t moduleClk, TPITData PITData) // May have to be thread
 {
   // Initial setup
   ModuleClock = moduleClk;
   InverseTimingModeEnabled = false;
   // PIT_Init
-  PIT_Init();
+  PIT_Init(PITData);
 
   // Shared thread data
-  // Sampler manager data
-  SamplerManagerData =
-  {
-    .FrequencyLostSemaphore = OS_SemaphoreCreate(0),
-    .VoltageOutOfBoundsSemaphore = OS_SemaphoreCreate(0)
-  }
-
-  // Frequency data
-  FrequencyData =
-  {
-    .FrequencyTrackedSemaphore = OS_SemaphoreCreate(0),
-    .matchedFrequency = matchedFrequency
-  }
-
   // SamplePasser data
-  PassSampleData.PITTimerCompleteSemaphore = OS_SemaphoreCreate(0);
+  PassSampleData.PITDataSampleTakenSemaphore = OS_SemaphoreCreate(0);
+  TPassSampleChannelData PassSampleChannelData[NB_SAMPLER_CHANNELS];
   for (int i = 0; i < NB_SAMPLER_CHANNELS; i++)
   {
-    .PassSampleChannelData[i] =
-    {
-      .SamplerFullSemaphore = OS_SemaphoreCreate(0),
-      .FrequencyLost = true,
-      .channelNb = i,
-      .iterator = 0,
-      // .analogSample = 0,
-      // .sampleArray[0] == 0,
-    }
+    PassSampleChannelData[i].SamplerFullSemaphore = OS_SemaphoreCreate(0);
+    PassSampleChannelData[i].channelNb = i;
+    PassSampleChannelData[i].iterator = 0;
   };
 
   // PIT data --> this may be used within other functions
   PITData = ConvertPassSampleDataToPITData(PassSampleData);
   // Analyzer data
-  AnalyzerData[NB_SAMPLER_CHANNELS];
   for (int channelNb = 0; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
   {
-    TAnalyzerData AnalyzerData[channelNb] = ConvertPassSampleDataToAnalyzerData(PassSampleData, channelNb);
+    AnalyzerThreadData[channelNb] = ConvertPassSampleDataToAnalyzerThreadData(PassSampleData, channelNb);
   }
 }
 
 // SamplerThread --> runs threads and calls initial setup too
 void SamplerManagerThread(void* pData)
 {
-  // FrequencyMatcherThread --> 1 thread
-  error = OS_ThreadCreate(FrequencyMatcherThread,
-                          &FrequencyData,
-                          &InitModulesThreadStack[THREAD_STACK_SIZE - 1],
-                          5); // Freq thread priority
-
-  // block this until complete (may need to make not a thread) or pass in semaphore and wait on it
-  OS_SemaphoreWait(FrequencyData->FrequencyTrackedSemaphore, 0);
   // convert freq to ticksPerSample
-  uint32_t ticksPerSample = ModuleClock / (FrequencyData->matchedFrequency * SAMPLES_PER_CYCLE);
+  uint32_t ticksPerSample = ModuleClock / (FrequencyTrackerData->matchedFrequency * SAMPLES_PER_CYCLE);
   // Pass the new set sampling freq to PIT --> restart: true, alarm: false
   PIT_Set(ticksPerSample, true, false, &PITData);
 
@@ -147,136 +118,166 @@ void SamplerManagerThread(void* pData)
   for (int threadNb = 0; threadNb < NB_SAMPLER_CHANNELS; threadNb++)
   {
     error = OS_ThreadCreate(AnalyzerThread,
-                            &AnalyzerData[threadNb],
+                            &AnalyzerThreadData[threadNb],
                             &SamplerThreadStacks[threadNb][THREAD_STACK_SIZE - 1],
                             SAMPLER_THREAD_PRIORITIES[threadNb]); // analyzer thread priority
   }
 
 }
 
-void AlarmThread(void* pData)
+// no need to be a thread
+void AlarmMonitoring(TAlarmMonitoringData RMSData)
 {
   //initial data
-  #define RMSData ((TAlarmData*)pData)
-  // need to be in shared struct
-  bool alarmingHigh = false;
-  bool alarmingLow = false;
-  for (;;)
-  {
-    OS_SemaphoreWait(RMSData->VoltageCalculatedSemaphore, 0);
+  #define RMSData ((TAlarmMonitoringData*)pData)
+  OS_SemaphoreWait(RMSData->VoltageCalculatedSemaphore, 0);
 
-    uint32_t RMS = RMSData->RMS;
-    uint32_t DeviationValue;
-    // deviation = Deviation(RMS, &DeviationValue);
-    if (alarmingHigh)
+  uint32_t RMS = RMSData->RMS;
+  uint32_t DeviationValue;
+  // deviation = Deviation(RMS, &DeviationValue);
+  if (alarmingHigh)
+  {
+    if (!BeyondHighBound(RMS))
+    // No longer alarming
     {
-      if (!AboveHighBound(RMS))
-        alarmingHigh = false;
+      alarmingHigh = false;
+      PIT_DisableAlarm();
     }
-    else if (alarmingLow)
-    {
-      if (!AboveLowBound(RMS))
-        alarmingLow = false;
-    }
-    if (alarming && OutOfLimits(RMS))
+    else
     {
       if (InverseTimingModeEnabled)
-        // updatePIT
-
+        PIT_Update();
     }
-    else if (!alarming && OutOfLimits(RMS))
+  }
+  else if (alarmingLow)
+  {
+    if (!BeyondLowBound(RMS))
+    // No longer alarming
     {
-      alarming = true;
+      alarmingLow = false;
+      PIT_DisableAlarm();
     }
-    else if (alarming && !OutOfLimits(RMS))
+    else
     {
-      alarming = false;
+      if (InverseTimingModeEnabled)
+        PIT_Update();
     }
-    // wait on votage calculated semaphore
-    // if
-
   }
 
 }
 
+void AlarmControlThread(void* pData)
+{
+  // shared vars
+  #define alarmControlThreadData ((TAlarmControlThreadData*)pData)
 
+  OS_SemaphoreWait(alarmControlThreadData->PITDataSampleTakenSemaphore, 0);
+
+  PIT_Disable();
+
+  if (alarmControlThreadData->alarmingHigh)
+  {
+    if (BeyondHighBound(RMS))
+    {
+      VoltageRaiseEvent();
+      alarmControlThreadData->alarmingHigh = false;
+    }
+
+  }
+  else if (alarmControlThreadData->alarmingLow)
+  {
+    if (BeyondLowBound(RMS))
+    {
+      VoltageLowerEvent();
+      alarmControlThreadData->alarmingLow = false;
+    }
+  }
+
+  // any necessary resetting
+
+}
 
 // consider 3 threads for this one rather than one as it will be less messy
 void AnalyzerThread(void* pData)
 {
-  #define analyzerData ((TAnalyzerData*)pData)
+  #define analyzerThreadData ((TAnalyzerThreadData*)pData)
 
-  // put in parent
-  TAlarmData AlarmData =
-  {
-    // .RMS = 0,
-    .VoltageCalculatedSemaphore = OS_SemaphoreCreate(0)
-  }
-  error = OS_ThreadCreate(AlarmThread,
-                          &AlarmData,
-                          &InitModulesThreadStack[THREAD_STACK_SIZE - 1],
-                          5); // Highest priority
+  // Alarm monitoring thread will have already been initialised with shared values
 
-  // pass RMS ptr to alarm threads
   // wait on samplesReady semaphore
-  // immediately store locally (array and iterator - interrupt disabled)
+  OS_SemaphoreWait(analyzerThreadData->SamplerFullSemaphore, 0);
+  // start timer
+  // OS_TimerSet(0);
 
-  // if crosses < 3 & < 15 samples
-    // disable PIT
-    // raise match freq thread
-    // notify passSamp
+  for (;;)
+  {
+    // get crosses
+    uint8_t crossPositions[SAMPLER_WINDOW_CROSSES];
+    uint8_t crossesCount;
+    for (uint8_t iterator = 1; iterator < SAMPLES_ARRAY_SIZE; iterator++)
+    {
+      int32_t previous = analyzerThreadData->sampleArray[iterator-1];
+      int32_t current = analyzerThreadData->sampleArray[iterator];
+      if (polarityChange(previous, current))
+      {
+        crossPositions[crossesCount++] = iterator;
+        if (crossesCount == 3)
+          break;
+      }
+    }
+    // if window size is incorrect
+    if (!(crossesCount == 3 && (crossPositions[2] - crossPositions[0]) >= 15))
+    {
+      // while this is a long process, there is no point servicing any interrupts until frequency is matched
+      OS_DisableInterrupts();
+      PIT_Disable();
+      FrequencyMatcher();
+      OS_EnableInterrupts();
+    }
+    //
+    else
+    {
+      GetRMS(analyzerThreadData->sampleArray);
+      AlarmMonitoring();
+    }
+    analyzerThreadData->fillNewSamples = true;
 
-  // check voltage limits
-    // signal new voltage calculated
+    // check voltage limits
+      // signal new voltage calculated
 
-  // send bool readyForMoreSamples
+    // send bool readyForMoreSamples
+
+  }
 }
 
 // PIT_Update will be where PITs can be turned off
 
 // TODO: check whether we need to use floats
-void FrequencyMatcherThread(void* pData)
+void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
 {
-  // cast ptr
-  #define FrequencyData ((TFrequencyData*)pData)
 
-  // don't need want shared semaphore for this one, we create new
-  // so that only it will be raised and not sample thread semaphore
-  // once freq analysis done, sampling semaphore will be passed to PIT0 in parent function
+  uint8_t maxSampleSpeed = HFR * SAMPLES_PER_CYCLE; // samples per second
+  uint32_t ticksPerSample = ModuleClock / maxSampleSpeed;
 
-  // TODO: Change to higher freq, and consider eliminating magic numbers
-  uint8_t sampleSpeed = HFR * SAMPLES_PER_CYCLE; // samples per second
-  uint32_t ticksPerSample = ModuleClock / sampleSpeed;
-  // this will be created in earlier thread and fed into all other threads
-  // TODO: modify according to types
-  TPITData PITData =
-  {
-    .FrequencyAnalyzerSemaphore = OS_SemaphoreCreate(0),
-    .channelNb = 0
-    // .analogSample = 0
-  }
   // continue waiting on and taking samples until 3 crossings found
   uint8_t crossCount;
   bool inWindow = false;
   int32_t surroundingCrossValues[4];
   int8_t sampleCount = 0;
-  // set PIT, pass it the temp channel and semaphore - or set freq as a mode
-  PIT_Set(ticksPerSample, true, PITData) // period, restart, data (ptrStorage, chan, sem)
+  // set PIT
+  PIT_Set(ticksPerSample, true, false, true); // period, restart, alarm, frequencyTracking, data (ptrStorage, chan, sem)
+
   // wait on first value
-  OS_SemaphoreWait(PITData->FrequencyAnalyzerSemaphore, 0); // maybe drop out if an error
+  OS_SemaphoreWait(TrackingSemaphore, 0); // maybe drop out if an error
   // place first sample into previous for comparison
-  int32_t previousValue = PITData->analogSample;
+  int32_t previousValue = analogSample;
   int32_t currentValue;
-  bool previousStatePos;
-  bool currentStatePos;
   while (crossCount < SAMPLER_WINDOW_CROSSES) // 3
   {
-    OS_SemaphoreWait(PITData->FrequencyAnalyzerSemaphore, 0);
-    currentValue = PITData->analogSample;
+    OS_SemaphoreWait(TrackingSemaphore, 0);
+    currentValue = analogSample;
     // check for crossing and update crossing values and count
-    previousStatePos = previousValue > 0;
-    currentStatePos = currentValue > 0;
-    if (previousStatePos != currentStatePos)
+    if (PolarityChange(previousValue, currentValue))
     {
       crossCount++;
       if (crossCount == 1)
@@ -298,19 +299,23 @@ void FrequencyMatcherThread(void* pData)
       sampleCount++;
   }
   // calculate and interpolate freq (linear to start with)
-  uint32_t waveStart = linearlyInterpolate(ticksPerSample, surroundingCrossValues[1], surroundingCrossValues[0]);
-  uint32_t waveEnd = linearlyInterpolate(ticksPerSample, surroundingCrossValues[2], surroundingCrossValues[3]);
+  uint32_t waveStart = LinearlyInterpolate(ticksPerSample, surroundingCrossValues[1], surroundingCrossValues[0]);
+  uint32_t waveEnd = LinearlyInterpolate(ticksPerSample, surroundingCrossValues[2], surroundingCrossValues[3]);
 
   // store freq into passed freq param
-  // Hz = waveStart + ((sampleCount /* - 1 */) * ticksPerSample + waveEnd;
-  FrequencyData->matchedFrequency = waveStart + ((sampleCount /* - 1 */) * ticksPerSample + waveEnd;
+  uint32_t newSamplePeriod = waveStart + ((sampleCount - 1) * ticksPerSample) + waveEnd;
 
-  OS_SemaphoreSignal(FrequencyData->FrequencyTrackedSemaphore);
-
-  OS_ThreadDelete(OS_PRIORITY_SELF); // or consider using semaphore
+  PIT_Set(newSamplePeriod);
 }
 
-uint32_t linearlyInterpolate(const uint32_t ticksPerSample, const int32_t inCycleValue, const int32_t outOfCycleValue)
+bool PolarityChange(int32_t firstValue, int32_t secondValue)
+{
+  bool firstStatePos = firstValue > 0;
+  bool secondStatePos = secondValue > 0;
+  return (firstStatePos != secondStatePos);
+}
+
+uint32_t LinearlyInterpolate(const uint32_t ticksPerSample, const int32_t inCycleValue, const int32_t outOfCycleValue)
 {
   int32_t sampleAmpChange = abs(inCycleValue) + abs(outOfCycleValue);
   int32_t inCycleAmpChange = abs(inCycleValue - 0);
@@ -322,12 +327,49 @@ void PassSampleThread(void* pData)
 {
 
   #define passSampleData ((TPassSampleData*)pData)
-  bool samplerArraysNeedFilling = true;
+  uint8_t fillCounter = 0;
 
   for (;;)
   {
     // wait on TimerCompleteSemaphore
-    OS_SemaphoreWait(passSampleData->PITTimerCompleteSemaphore, 0);
+    OS_SemaphoreWait(passSampleData->PITDataSampleTakenSemaphore, 0);
+    // store pointer into array asap
+    OS_DisableInterrupts();
+    for (int channelNb = 0; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
+    {
+      if (passSampleData->PassSampleChannelData[channelNb].analyzerReady)
+      {
+        passSampleData->PassSampleChannelData[channelNb]->sampleArray[fillCounter]
+                                                                      = passSampleData->PassSampleChannelData[channelNb]->analogSample;
+      }
+    }
+    OS_EnableInterrupts();
+    for (int channelNb = 0; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
+    {
+      if (passSampleData->PassSampleChannelData[channelNb].fillNewSamples)
+      {
+        fillCounter++;
+        if (fillCounter == SAMPLES_ARRAY_SIZE)
+        {
+          passSampleData->PassSampleChannelData[channelNb].fillNewSamples = false;
+          fillCounter = 0;
+        }
+      }
+      if (passSampleData->PassSampleChannelData[channelNb].analyzerReady)
+      {
+        // start timer - use an array that stores multiple timers
+        OS_TimerStart(0);
+        OS_SemaphoreSignal(passSampleData->PassSampleChannelData[channelNb].SamplerFullSemaphore);
+      }
+
+    }
+
+  }
+
+  for (;;)
+  {
+    // wait on TimerCompleteSemaphore
+    OS_SemaphoreWait(passSampleData->PITDataSampleTakenSemaphore, 0);
     // store pointer into array asap
     OS_DisableInterrupts();
     for (int channelNb = 0; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
@@ -345,9 +387,9 @@ void PassSampleThread(void* pData)
       if (passSampleData->PassSampleChannelData[channelNb]->iterator == SAMPLES_ARRAY_SIZE)
         passSampleData->PassSampleChannelData[channelNb]->iterator = 0;
 
-      if (passSampleData->PassSampleChannelData[channelNb]->FrequencyLost && passSampleData->PassSampleChannelData[channelNb]->sampleArray[SAMPLES_ARRAY_SIZE - 1] != NULL) // may need to iterate through
+      if (passSampleData->PassSampleChannelData[channelNb]->fillNewSamples && passSampleData->PassSampleChannelData[channelNb]->sampleArray[SAMPLES_ARRAY_SIZE - 1] != NULL) // may need to iterate through
       {
-        passSampleData->PassSampleChannelData[channelNb]->FrequencyLost = false;
+        passSampleData->PassSampleChannelData[channelNb]->fillNewSamples = false;
       }
     }
     // if analyzerReady bool and samplerFull bool
@@ -356,7 +398,7 @@ void PassSampleThread(void* pData)
     // raise semaphores all at once
     for (int channelNb = 0; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
     {
-      if (passSampleData->PassSampleChannelData[channelNb]->FrequencyLost)
+      if (passSampleData->PassSampleChannelData[channelNb]->fillNewSamples)
       {
         OS_SemaphoreSignal(passSampleData->PassSampleChannelData[channelNb]->SamplerFullSemaphore);
       }

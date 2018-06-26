@@ -1,11 +1,13 @@
 #include "types.h"
 #include "MK70F12.h"
-#include "PIT.h"
+// #include "PIT.h"
 
 #include "analog.h"
 #include "OS.h"
 
-static TPITRequirements PITData;
+static TPITData PITData;
+static bool FrequencyTracking;
+static uint32_t SampleTickPeriod;
 
 /*! @brief Sets up the PIT before first use.
  *
@@ -16,7 +18,9 @@ static TPITRequirements PITData;
  *  @return bool - TRUE if the PIT was successfully initialized.
  *  @note Assumes that moduleClk has a period which can be expressed as an integral number of nanoseconds.
  */
-bool PIT_Init() {
+bool PIT_Init(TPITData pITData) {
+
+  PITData = pITData
 
   // Enable clock gate to PIT module
   SIM_SCGC6 |= SIM_SCGC6_PIT_MASK;
@@ -42,24 +46,10 @@ bool PIT_Init() {
  *                 FALSE if the PIT will use the new value after a trigger event.
  *  @note The function will enable the timer and interrupts for the PIT.
  */
-void PIT_Set(const uint32_t sampleTickPeriod, const bool restart, const bool alarm, void* pData) {
+void PIT_Set(const uint32_t sampleTickPeriod, const bool restart, const bool frequencyTracking) {
 
-  #define samplerData ((TSamplerData*)pData)
-
-  if (alarm)
-  {
-    // save different semaphore
-    // use alarm semaphore
-  }
-
-  TPITRequirements PITRequirements =
-  {
-    .FrequencyAnalyzerSemaphore = samplerData->FrequencyAnalyzerSemaphore,
-    .channelNb = samplerData->channelNb,
-    .analogSample = SamplerData->analogSample
-  }
-
-  PITData = PITRequirements;
+  SampleTickPeriod = sampleTickPeriod;
+  FrequencyTracking = frequencyTracking;
 
   if (restart) {
     // Disable the timer and interrupts first
@@ -75,6 +65,23 @@ void PIT_Set(const uint32_t sampleTickPeriod, const bool restart, const bool ala
 
   // Enable the timer and interrupts
   PIT_Enable(true);
+
+}
+
+void PIT_UpdateAlarm(uint8_t deviation, bool start, uint8_t channelNb)
+{
+
+  OS_TimeSet(0);
+  uint32_t loadValue = PIT_LDVAL(channelNb); // 5 seconds
+  uint32_t currentValue = 0;
+
+  if (!start) {
+    loadValue = PIT_LDVAL(channelNb);
+    currentValue = PIT_LDVAL(channelNb);
+
+  }
+
+
 
 }
 
@@ -100,24 +107,66 @@ void PIT_Enable(const bool enable) {
  *  The user callback function will be called.
  *  @note Assumes the PIT has been initialized.
  */
-void __attribute__ ((interrupt)) PIT_ISR(void) {
+void __attribute__ ((interrupt)) PIT1_ISR(void) {
 
   OS_ISREnter();
 
-  PIT_TFLG0 = PIT_TFLG_TIF_MASK; // check which flag
-  // check for both alarm semaphores active & all channels
-  // check for these by which flag is set and semaphore passed in for that PIT no.
+  PIT_TFLG1 = PIT_TFLG_TIF_MASK;
 
-  // PITData
-  // check if PIT0 first
-  for (/* current channels */) // this will only be channel 0 for freq analysis, 0,1,2 for sampling
+  OS_SemaphoreSignal(PITData.PITChannelData[0].PITAlarmSemaphore);
+
+  OS_ISRExit();
+
+}
+
+void __attribute__ ((interrupt)) PIT2_ISR(void) {
+
+  OS_ISREnter();
+
+  PIT_TFLG1 = PIT_TFLG_TIF_MASK;
+
+  OS_SemaphoreSignal(PITData.PITChannelData[1].PITAlarmSemaphore);
+
+  OS_ISRExit();
+
+}
+
+void __attribute__ ((interrupt)) PIT3_ISR(void) {
+
+  OS_ISREnter();
+
+  PIT_TFLG1 = PIT_TFLG_TIF_MASK;
+
+  OS_SemaphoreSignal(PITData.PITChannelData[2].PITAlarmSemaphore);
+
+  OS_ISRExit();
+
+}
+
+
+void __attribute__ ((interrupt)) PIT0_ISR(void) {
+
+  OS_ISREnter();
+
+  PIT_TFLG0 = PIT_TFLG_TIF_MASK;
+
+  if (FrequencyTracking)
   {
 
-    // take sample & raise semaphore
-    Analog_Get(PITData->channelNb, &PITData->analogSample); // check this works
-    // TODO: may still need to analog put?
-    OS_SemaphoreSignal(PITData->TimerCompleteSemaphore);
+    Analog_Get(0, &PITData.PITChannelData[0].analogSample);
+    OS_SemaphoreSignal(PITData.PITFrequencySampleTakenSemaphore);
   }
+  else
+  {
+    for (uint8_t channelNb; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
+    {
+      // take samples
+      Analog_Get(PITData.PITChannelData[channelNb].channelNb, &PITData.PITChannelData[channelNb].analogSample);
+    }
+    // signal semaphore
+    OS_SemaphoreSignal(PITData.PITDataSampleTakenSemaphore);
+  }
+
 
   // if other PITs have flagged, then raise alarm for appropriate PIT no.
 

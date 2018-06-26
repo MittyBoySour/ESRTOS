@@ -26,6 +26,16 @@
 
 #define NB_SAMPLER_CHANNELS 3
 
+/////////
+
+/*
+ * 2^2 = 4
+ * 2^4 = 16
+ * 2^8 = 256
+ * 2^16 = 65536
+ * 2^32 = 4294967296
+ * 2^64 = 18446744073709551616
+ */
 // Unions to efficiently access hi and lo parts of integers and words
 typedef union
 {
@@ -83,92 +93,64 @@ typedef union
 // Thread data passing
 
 // struct to allow easy passing of data to PIT module
-typedef struct PITData =
+typedef struct PITData
 {
-  OS_ECB* PITTimerCompleteSemaphore;
-  uint8_t channelsCount;
-  typedef struct PITChannelData[NB_SAMPLER_CHANNELS] =
-  {
-    uint8_t channelNb;
-    int32_t analogSample; // pass struct in as ptr
-  } TPITChannelData;
+  OS_ECB* PITDataSampleTakenSemaphore;
+  OS_ECB* PITFrequencySampleTakenSemaphore;
+  TPITChannelData PITChannelData[NB_SAMPLER_CHANNELS];
 } TPITData;
 
-// struct to allow easy passing of Frequency data to thread
-typedef struct FrequencyData =
+typedef struct PITChannelData
 {
-  OS_ECB* FrequencyTrackedSemaphore;
-  uint32_t matchedFrequency;
-} TFrequencyData;
+  OS_ECB* PITAlarmSemaphore;
+  uint8_t channelNb;
+  int32_t analogSample; // pass struct in as ptr
+} TPITChannelData;
 
-typedef struct PassSampleData =
+typedef struct PassSampleData
 {
-  OS_ECB* PITTimerCompleteSemaphore; // shared with PIT module
-  typedef struct PassSampleChannelData[NB_SAMPLER_CHANNELS] =
-  {
-    OS_ECB* SamplerFullSemaphore; // shared with analyzer thread
-    bool FrequencyLost; // shared with analyzer thread
-    uint8_t channelNb; // shared with all
-    uint32_t analogSample; // shared with analyzer thread
-    uint32_t sampleArray[SAMPLES_ARRAY_SIZE]; // shared with analyzer thread
-  } TPassSampleChannelData;
+  OS_ECB* PITDataSampleTakenSemaphore; // shared with PIT module
+  TPassSampleChannelData PassSampleChannelData[NB_SAMPLER_CHANNELS];
 } TPassSampleData;
 
-typedef struct AnalyzerData =
+typedef struct PassSampleChannelData
+{
+  OS_ECB* SamplerFullSemaphore; // shared with analyzer thread
+  bool analyzerReady; // shared with analyzer thread
+  bool fillNewSamples; // shared with analyzer thread
+  uint8_t channelNb; // shared with all
+  uint32_t analogSample; // shared with analyzer thread
+  uint32_t sampleArray[SAMPLES_ARRAY_SIZE]; // shared with analyzer thread
+} TPassSampleChannelData;
+
+typedef struct AnalyzerThreadData
 {
   OS_ECB* SamplerFullSemaphore;
+  OS_ECB* FrequencyTrackerSemaphore;
   uint8_t channelNb;
   uint8_t iterator;
   uint32_t sampleArray[SAMPLES_ARRAY_SIZE];
-} TAnalyzerData;
+  bool analyzerReady;
+  bool fillNewSamples;
+  TAlarmMonitoringData AlarmMonitoringData;
+} TAnalyzerThreadData;
 
-typedef struct SamplerManagerData =
+typedef struct AlarmMonitoringData
 {
-  OS_ECB* FrequencyLostSemaphore;
-  OS_ECB* VoltageOutOfBoundsSemaphore;
-}
-
-typedef struct AlarmData =
-{
+  OS_ECB* PITDataSampleTakenSemaphore;
+  uint8_t channelNb; // not needed
   uint32_t RMS;
   OS_ECB* VoltageCalculatedSemaphore;
-} TAlarmData
+  bool alarmingHigh;
+  bool alarmingLow;
+} TAlarmMonitoringData;
 
-
-// Thread data morph functions to be implemented in c file
-
-// convert PassSample data to PIT data
-TPITData ConvertPassSampleDataToPITData(const TPassSampleData PassSampleData)
+typedef struct AlarmControlThreadData
 {
-  TPITData PITData;
-  PITData.PITTimerCompleteSemaphore = PassSampleData->PITTimerCompleteSemaphore;
-  for (int i = 0; i < PassSampleData->channelsCount; i++)
-  {
-    PITData.PITChannelData[i] =
-    {
-      .channelNb = PassSampleData->PassSampleChannelData[i]->channelNb;
-      .analogSample = PassSampleData->PassSampleChannelData[i]->analogSample;
-    }
-  }
-  return PITData;
-}
-
-// convert PassSample data to Analyzer data
-TAnalyzerData ConvertPassSampleDataToAnalyzerData(const TPassSampleData PassSampleData, const uint8_t channelNb)
-{
-  TAnalyzerData AnalyzerData;
-  AnalyzerData.SamplerFullSemaphore = PassSampleData->PassSampleChannelData[channelNb]->SamplerFullSemaphore;
-  AnalyzerData.channelNb = channelNb; // for ease as responsibility is on caller
-  AnalyzerData.iterator = PassSampleData->PassSampleChannelData[channelNb]->iterator;
-  AnalyzerData.sampleArray = PassSampleData->PassSampleChannelData[channelNb]->sampleArray;
-  return AnalyzerData;
-}
-
-TAnalyzerData ConvertSampleManagerDataToAnalyzerData(const TSampleManagerData SampleManagerData, const uint8_t channelNb)
-{
-  AnalyzerData.FrequencyLostSemaphore = SampleManagerData[channelNb]->FrequencyLostSemaphore;
-  AnalyzerData.VoltageOutOfBoundsSemaphore = SampleManagerData[channelNb]->VoltageOutOfBoundsSemaphore;
-
-}
+  OS_ECB* PITAlarmSemaphore;
+  uint8_t channelNb; // may not be needed
+  bool alarmingHigh;
+  bool alarmingLow;
+} TAlarmControlThreadData;
 
 #endif
