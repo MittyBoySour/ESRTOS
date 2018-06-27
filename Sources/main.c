@@ -156,7 +156,7 @@ int main(void)
                           &InitModulesThreadStack[THREAD_STACK_SIZE - 1],
                           0); // Highest priority
 
-  /*
+
   error = OS_ThreadCreate(PassSampleThread,
                           &PassSampleData,
                           &InitModulesThreadStack[THREAD_STACK_SIZE - 1],
@@ -178,7 +178,7 @@ int main(void)
                             ALARM_CONTROL_THREAD_PRIORITIES[threadNb]);
   }
 
-	*/
+
   // Start multithreading - never returns!
   OS_Start();
 }
