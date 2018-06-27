@@ -18,12 +18,8 @@
 
 bool Sampler_Init(const uint32_t moduleClk);
 
-void AlarmControlThread(void* pData);
-
 void AnalyzerThread(void* pData);
 
 void PassSampleThread(void* pData);
-
-void setTimingMode(const bool inverse);
 
 #endif /* SOURCES_SAMPLER_H_ */

@@ -6,7 +6,7 @@
 #include "OS.h"
 #include "PIT.h"
 
-static TPITData PITData;
+static TPITData* PITData;
 static uint32_t ModuleClock;
 static bool FrequencyTracking;
 static uint32_t SampleTickPeriod;
@@ -20,7 +20,7 @@ static uint32_t SampleTickPeriod;
  *  @return bool - TRUE if the PIT was successfully initialized.
  *  @note Assumes that moduleClk has a period which can be expressed as an integral number of nanoseconds.
  */
-bool PIT_Init(const uint32_t moduleClk, TPITData pITData) {
+bool PIT_Init(const uint32_t moduleClk, TPITData* pITData) {
 
   ModuleClock = moduleClk;
   PITData = pITData;
@@ -87,6 +87,14 @@ void PIT_Set(const uint32_t sampleTickPeriod, const bool restart, const bool fre
 
 }
 
+
+/*! @brief Sets the value of the desired period of the PIT.
+ *
+ *  @param deviation The voltage deviation out of bounds
+ *  @param channelNb The channel that alarmed
+ *
+ *  @note Is only used in Inverse mode
+ */
 void PIT_Update(float deviation, uint8_t channelNb)
 {
 
@@ -123,6 +131,12 @@ void PIT_Update(float deviation, uint8_t channelNb)
 
 }
 
+/*! @brief Disables the specified PIT timer.
+ *
+ *  @param channelNb The channel to be disabled
+ *
+ *  @note called externally
+ */
 void PIT_Disable(uint8_t channelNb)
 {
   Enable(false, channelNb);
@@ -131,7 +145,7 @@ void PIT_Disable(uint8_t channelNb)
 /*! @brief Interrupt service routine for the PIT.
  *
  *  The periodic interrupt timer has timed out.
- *  The user callback function will be called.
+ *  Alarm for channel 0 has been triggered.
  *  @note Assumes the PIT has been initialized.
  */
 void __attribute__ ((interrupt)) PIT1_ISR(void) {
@@ -140,37 +154,54 @@ void __attribute__ ((interrupt)) PIT1_ISR(void) {
 
   PIT_TFLG1 = PIT_TFLG_TIF_MASK;
 
-  OS_SemaphoreSignal(PITData.PITChannelData[0]->PITAlarmSemaphore);
+  OS_SemaphoreSignal(PITData->PITChannelData[0]->PITAlarmSemaphore);
 
   OS_ISRExit();
 
 }
 
+/*! @brief Interrupt service routine for the PIT.
+ *
+ *  The periodic interrupt timer has timed out.
+ *  Alarm for channel 1 has been triggered.
+ *  @note Assumes the PIT has been initialized.
+ */
 void __attribute__ ((interrupt)) PIT2_ISR(void) {
 
   OS_ISREnter();
 
   PIT_TFLG1 = PIT_TFLG_TIF_MASK;
 
-  OS_SemaphoreSignal(PITData.PITChannelData[1]->PITAlarmSemaphore);
+  OS_SemaphoreSignal(PITData->PITChannelData[1]->PITAlarmSemaphore);
 
   OS_ISRExit();
 
 }
 
+/*! @brief Interrupt service routine for the PIT.
+ *
+ *  The periodic interrupt timer has timed out.
+ *  Alarm for channel 2 has been triggered.
+ *  @note Assumes the PIT has been initialized.
+ */
 void __attribute__ ((interrupt)) PIT3_ISR(void) {
 
   OS_ISREnter();
 
   PIT_TFLG1 = PIT_TFLG_TIF_MASK;
 
-  OS_SemaphoreSignal(PITData.PITChannelData[2]->PITAlarmSemaphore);
+  OS_SemaphoreSignal(PITData->PITChannelData[2]->PITAlarmSemaphore);
 
   OS_ISRExit();
 
 }
 
-
+/*! @brief Interrupt service routine for the PIT.
+ *
+ *  The periodic interrupt timer has timed out.
+ *  Samples will be taken for the channels and semaphores signalled
+ *  @note Assumes the PIT has been initialized.
+ */
 void __attribute__ ((interrupt)) PIT0_ISR(void) {
 
   OS_ISREnter();
@@ -179,22 +210,19 @@ void __attribute__ ((interrupt)) PIT0_ISR(void) {
 
   if (FrequencyTracking)
   {
-    Analog_Get(0, PITData.PITChannelData[0]->analogSample);
-    OS_SemaphoreSignal(PITData.PITFrequencySampleTakenSemaphore);
+    Analog_Get(0, PITData->PITChannelData[0]->analogSample);
+    OS_SemaphoreSignal(PITData->PITFrequencySampleTakenSemaphore);
   }
   else
   {
     for (uint8_t channelNb; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
     {
       // take samples
-      Analog_Get(PITData.PITChannelData[channelNb]->channelNb, PITData.PITChannelData[channelNb]->analogSample);
+      Analog_Get(PITData->PITChannelData[channelNb]->channelNb, PITData->PITChannelData[channelNb]->analogSample);
     }
     // signal semaphore
-    OS_SemaphoreSignal(PITData.PITDataSampleTakenSemaphore);
+    OS_SemaphoreSignal(PITData->PITDataSampleTakenSemaphore);
   }
-
-
-  // if other PITs have flagged, then raise alarm for appropriate PIT no.
 
   OS_ISRExit();
 

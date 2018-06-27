@@ -8,11 +8,11 @@
 #include "CPU.h"
 #include "OS.h"
 #include "types.h"
-/*
+
 #include "analog.h"
 #include "Sampler.h"
 #include "AlarmMonitor.h"
-*/
+
 // ----------------------------------------
 // Thread set up
 // ----------------------------------------
@@ -79,7 +79,7 @@ static void InitSharedThreadData()
   {
     if (channelNb == 0)
     {
-      AnalyzerThreadData[channelNb].FrequencyTrackerSemaphore = OS_SemaphoreCreate(0);
+      AnalyzerThreadData[channelNb].FrequencyTrackerSemaphore = PITData.PITDataSampleTakenSemaphore;
     }
     AnalyzerThreadData[channelNb].SamplerFullSemaphore = OS_SemaphoreCreate(0);
     AnalyzerThreadData[channelNb].channelNb = channelNb;
@@ -130,7 +130,7 @@ static void InitModulesThread(void* pData)
   // Sampler
   Sampler_Init(CPU_BUS_CLK_HZ);
 
-  PIT_Init(&PITData);
+  PIT_Init(CPU_BUS_CLK_HZ, &PITData);
 
   AlarmMonitor_Init();
 

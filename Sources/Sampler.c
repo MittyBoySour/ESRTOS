@@ -155,6 +155,12 @@ void AnalyzerThread(void* pData)
 {
   #define analyzerThreadData ((TAnalyzerThreadData*)pData)
 
+	if (analyzerThreadData->channelNb == 0)
+	{
+        PIT_Disable(analyzerThreadData->channelNb);
+        FrequencyTracker(analyzerThreadData->FrequencyTrackerSemaphore, analyzerThreadData->analogSample);
+	}
+
   for (;;)
   {
     // wait on samplesReady semaphore
@@ -182,10 +188,8 @@ void AnalyzerThread(void* pData)
       if (!(crossesCount == 3 && (crossPositions[2] - crossPositions[0]) >= 15))
       {
         // while this is a long process, there is no point servicing any interrupts until frequency is matched
-        OS_DisableInterrupts();
         PIT_Disable(analyzerThreadData->channelNb);
         FrequencyTracker(analyzerThreadData->FrequencyTrackerSemaphore, analyzerThreadData->analogSample);
-        OS_EnableInterrupts();
       }
       //
       else
@@ -234,8 +238,8 @@ void PassSampleThread(void* pData)
     {
       if (passSampleData->PassSampleChannelData[channelNb]->analyzerReady)
       {
-        // passSampleData->PassSampleChannelData[channelNb]->sampleArray[fillCounter] = passSampleData->PassSampleChannelData[channelNb]->analogSample;
-        passSampleData->PassSampleChannelData[channelNb]->sampleArray[fillCounter] = 1;
+        passSampleData->PassSampleChannelData[channelNb]->sampleArray[fillCounter] = passSampleData->PassSampleChannelData[channelNb]->analogSample;
+        // passSampleData->PassSampleChannelData[channelNb]->sampleArray[fillCounter] = 1;
       }
     }
     OS_EnableInterrupts();

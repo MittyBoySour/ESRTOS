@@ -16,4 +16,6 @@ void AlarmMonitoring(TAlarmMonitoringData* RMSData);
 
 void AlarmControlThread(void* pData);
 
+void AlarmsetTimingMode(const bool inverse);
+
 #endif /* SOURCES_ALARMMONITOR_H_ */
