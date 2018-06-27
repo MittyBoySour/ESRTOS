@@ -15,6 +15,8 @@ static int32_t LowVoltageBound = (2 * 65536) / 65536;
 static int32_t FiveVolts = (5 * 65536) / 65536;
 
 
+static uint8_t Raises;
+static uint8_t Lowers;
 static bool InverseTimingModeEnabled;
 
 bool AlarmMonitor_Init()
