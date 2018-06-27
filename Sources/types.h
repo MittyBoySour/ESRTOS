@@ -92,7 +92,7 @@ typedef union
   } dParts;
 } TFloat;
 
-// Thread data passing
+//////////////////// Thread data passing
 
 // struct to allow easy passing of data to PIT module
 typedef struct PITChannelData

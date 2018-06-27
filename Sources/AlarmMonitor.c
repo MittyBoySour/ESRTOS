@@ -146,17 +146,19 @@ void AlarmMonitoring(TAlarmMonitoringData* RMSData)
 		{
 			RMSData->alarmingHigh = true;
 			Analog_Put(0, FiveVolts);
+			PIT_Update(0, RMSData->channelNb);
 		}
 		else if (BeyondLowBound(RMS))
 		{
 			RMSData->alarmingLow = true;
 			Analog_Put(1, FiveVolts);
+			PIT_Update(0, RMSData->channelNb);
 		}
 	}
 
 }
 
-/*! @brief Performs a voltage raise.
+/*! @brief Performs a voltage raise, writing current Raises to flash.
  *
  */
 void VoltageRaiseEvent()
@@ -166,7 +168,7 @@ void VoltageRaiseEvent()
 	Flash_Write16(FLASH_DATA_START + 4, ++Raises);
 }
 
-/*! @brief Performs a voltage lower.
+/*! @brief Performs a voltage lower, writing current Lowers to flash.
  *
  */
 void VoltageLowerEvent()

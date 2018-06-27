@@ -87,44 +87,46 @@ void PIT_Set(const uint32_t sampleTickPeriod, const bool restart, const bool fre
 
 }
 
-
 /*! @brief Sets the value of the desired period of the PIT.
  *
  *  @param deviation The voltage deviation out of bounds
  *  @param channelNb The channel that alarmed
  *
- *  @note Is only used in Inverse mode
+ *  @note If no current value, defaults to 5, otherwise assumes inverse mode and updates the timer according to deviation
+ *  0 is passed in if not in inverse mode for deviation, as it is not required
  */
 void PIT_Update(float deviation, uint8_t channelNb)
 {
 
-  // OS_TimeSet(0);
-
   uint32_t loadValue = PIT_LDVAL(channelNb);
-  uint32_t currentValue = PIT_LDVAL(channelNb);
+  uint32_t currentValue = PIT_CVAL(channelNb);
 
   if (loadValue == 0)
   {
 	  loadValue = (5 * ModuleClock); // 5 seconds
 	  currentValue = 0;
+	  PIT_LDVAL(channelNb + 1) = loadValue;
   }
+  else
+  {
+	  float deviationFactor = ((1 / 2) / deviation);
+	  float timeRemainingFactor = ((loadValue - currentValue) / loadValue);
 
-  float deviationFactor = ((1 / 2) / deviation);
-  float timeRemainingFactor = ((loadValue - currentValue) / loadValue);
+	  float newLoad = deviationFactor * loadValue * timeRemainingFactor;
 
-  float newLoad = deviationFactor * loadValue * timeRemainingFactor;
+	  // Disable the timer and interrupts first
+	  Enable(false, (channelNb + 1));
 
-  // Disable the timer and interrupts first
-  Enable(false, (channelNb + 1));
+	  // Clear pending interrupts on the PIT (w1c)
+	  PIT_TFLG(channelNb + 1) = PIT_TFLG_TIF_MASK;
 
-  // Clear pending interrupts on the PIT (w1c)
-  PIT_TFLG(channelNb + 1) = PIT_TFLG_TIF_MASK;
+	  newLoad -= OS_TimeGet();
 
-  newLoad -= OS_TimeGet();
+	  if (newLoad > 1)
+	    // Setting PIT_LDVAL to period in nanoseconds converted to moduleClk ticks
+	    PIT_LDVAL(channelNb + 1) = (uint32_t)newLoad;
 
-  if (newLoad > 1)
-    // Setting PIT_LDVAL to period in nanoseconds converted to moduleClk ticks
-    PIT_LDVAL(channelNb + 1) = (uint32_t)newLoad;
+  }
 
   // Enable the timer and interrupts
   Enable(true, (channelNb + 1));
@@ -134,7 +136,6 @@ void PIT_Update(float deviation, uint8_t channelNb)
 /*! @brief Disables the specified PIT timer.
  *
  *  @param channelNb The channel to be disabled
- *
  *  @note called externally
  */
 void PIT_Disable(uint8_t channelNb)
@@ -200,6 +201,7 @@ void __attribute__ ((interrupt)) PIT3_ISR(void) {
  *
  *  The periodic interrupt timer has timed out.
  *  Samples will be taken for the channels and semaphores signalled
+ *  If in frequency tracking mode, will only take samples for channel 1, otherwise all 3
  *  @note Assumes the PIT has been initialized.
  */
 void __attribute__ ((interrupt)) PIT0_ISR(void) {

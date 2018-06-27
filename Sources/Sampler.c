@@ -53,6 +53,7 @@ volatile extern TAnalyzerThreadData AnalyzerThreadData[NB_SAMPLER_CHANNELS];
 // Global data
 static float CurrentFrequency;
 
+
 bool Sampler_Init(const uint32_t moduleClk)
 {
   // Initial setup
@@ -61,6 +62,11 @@ bool Sampler_Init(const uint32_t moduleClk)
 
 }
 
+/*! @brief Checks for polarity changes (neg - pos) between adjacent values
+ *
+ *  @param firstValue first value to test.
+ *  @param firstValue second value to test.
+ */
 bool PolarityChange(const int32_t firstValue, const int32_t secondValue)
 {
 
@@ -70,6 +76,13 @@ bool PolarityChange(const int32_t firstValue, const int32_t secondValue)
 
 }
 
+/*! @brief interpolates between two values using sample ticks and values to determine where zero crossed
+ *
+ *  @param ticksPerSample count of ticks between samples.
+ *  @param inCycleValue point included in the cycle.
+ *  @param outOfCycleValue point not included in cycle.
+ *
+ */
 uint32_t LinearlyInterpolate(const uint32_t ticksPerSample, const int32_t inCycleValue, const int32_t outOfCycleValue)
 {
 
@@ -79,7 +92,14 @@ uint32_t LinearlyInterpolate(const uint32_t ticksPerSample, const int32_t inCycl
   return partialSample;
 }
 
-
+/*! @brief Sets new frequency calculated from ticks per sample and count of samples between two crosses
+ *
+ *  @param ticksPerSample count of ticks between samples.
+ *  @param surroundingCrossValues pointer used to store data from the PIT and here as defined in structs.
+ *  @param sampleCount count of samples between crosses.
+ *
+ *  @note Assumes that PIT has been setup correctly.
+ */
 void SetNewSamplePeriod(const uint32_t ticksPerSample, const uint32_t surroundingCrossValues[4], uint8_t sampleCount)
 {
   // calculate and interpolate freq (linear to start with)
@@ -93,6 +113,14 @@ void SetNewSamplePeriod(const uint32_t ticksPerSample, const uint32_t surroundin
 
 }
 
+/*! @brief Tracks the frequency until period is found and calculated
+ *
+ *  @param TrackingSemaphore semaphore used to analyze incoming samples triggered from PIT.
+ *  @param analogSample pointer used to store data from the PIT and here as defined in structs.
+ *
+ *  @note Assumes that PIT has been setup correctly.
+ *  Also assumes that frequency will not be taken above specified high bound (HFR)
+ */
 void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
 {
 
@@ -135,7 +163,6 @@ void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
       {
         surroundingCrossValues[2] = previousValue;
         surroundingCrossValues[3] = currentValue;
-        // could also terminate loop before last sampleCount increment - fullSampleCount
       }
     }
 
@@ -150,7 +177,13 @@ void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
   CurrentFrequency = ModuleClock / periodInTicks;
 }
 
-
+/*! @brief Runs the analyzer thread that analyzes a section of samples containing a wave cycle
+ *
+ *  @param pData thread data that is shared between intermediary threads such as PassSamples
+ *  This allows communication between these two threads through bools.
+ *
+ *  @note Assumes that PIT has been setup correctly.
+ */
 void AnalyzerThread(void* pData)
 {
   #define analyzerThreadData ((TAnalyzerThreadData*)pData)
@@ -222,6 +255,12 @@ void AnalyzerThread(void* pData)
   }
 }
 
+/*! @brief Runs the intermediary pass samples thread that takes samples from the PIT and puts them into an array
+ *  to be used by the analyzer thread when ready
+ *
+ *  @param pData thread data that is shared between analyzer thread and PIT for intermediary communication
+ *
+ */
 void PassSampleThread(void* pData)
 {
 

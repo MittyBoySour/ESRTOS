@@ -59,7 +59,10 @@ static TAlarmControlThreadData AlarmControlThreadData[NB_SAMPLER_CHANNELS];
 
 // ----------------------------------------
 
-
+/*! @brief Initialises the shared thread data through structs defined in types.h,
+ *  Pointing them towards one another where appropriate
+ *
+ */
 static void InitSharedThreadData()
 {
   // PITData
