@@ -5,7 +5,7 @@
  *      Author: 11238639
  */
 
-#include <stdint.h>
+#include <math.h>
 
 #include "OS.h"
 #include "PIT.h"
@@ -86,7 +86,10 @@ bool BeyondLowBound(const float RMS)
 
 float GetDeviation(const float* RMS)
 {
-	return (float)0;
+	if (*RMS > 3)
+		return *RMS - 3;
+	else
+		return 2 - *RMS;
 }
 
 bool PolarityChange(const int32_t firstValue, const int32_t secondValue)
@@ -98,9 +101,23 @@ bool PolarityChange(const int32_t firstValue, const int32_t secondValue)
 
 }
 
-void SetRMS(const uint32_t sampleArray[SAMPLES_ARRAY_SIZE], const float* RMS)
+void SetRMS(const uint32_t sampleArray[SAMPLES_ARRAY_SIZE], const uint8_t surroundingCrossValues[4], float* RMS)
 {
 
+  uint8_t cycleStart = surroundingCrossValues[1];
+  uint8_t cycleEnd = surroundingCrossValues[2];
+
+  float allSquared = 0;
+
+  for (uint8_t iterator = cycleStart; iterator < cycleEnd; iterator++)
+  {
+	allSquared += (sampleArray[iterator] * sampleArray[iterator]);
+  }
+
+  float meanSquared = allSquared * (1 / (cycleEnd - cycleStart));
+
+  // store result in passed and return any error
+  *RMS = sqrt(meanSquared);
 }
 
 void AlarmMonitoring(TAlarmMonitoringData* RMSData)
@@ -318,19 +335,20 @@ void AnalyzerThread(void* pData)
       //
       else
       {
-        SetRMS(analyzerThreadData->sampleArray, &analyzerThreadData->AlarmMonitoringData->RMS);
-        AlarmMonitoring(&analyzerThreadData->AlarmMonitoringData);
-        uint8_t sampleCount = crossPositions[2] - crossPositions[0];
-        uint32_t surroundingCrossValues[4];
-        surroundingCrossValues[0] = analyzerThreadData->sampleArray[crossPositions[0] - 1];
-        surroundingCrossValues[1] = analyzerThreadData->sampleArray[crossPositions[0]];
-        surroundingCrossValues[2] = analyzerThreadData->sampleArray[crossPositions[2] - 1];
-        surroundingCrossValues[3] = analyzerThreadData->sampleArray[crossPositions[2]];
+		uint8_t sampleCount = crossPositions[2] - crossPositions[0];
+		uint32_t surroundingCrossValues[4];
+		surroundingCrossValues[0] = analyzerThreadData->sampleArray[crossPositions[0] - 1];
+		surroundingCrossValues[1] = analyzerThreadData->sampleArray[crossPositions[0]];
+		surroundingCrossValues[2] = analyzerThreadData->sampleArray[crossPositions[2] - 1];
+		surroundingCrossValues[3] = analyzerThreadData->sampleArray[crossPositions[2]];
 
-        float currentSampleSpeed = (CurrentFrequency * SAMPLES_PER_CYCLE); // samples per second
-        uint32_t ticksPerSample = (uint32_t)(ModuleClock / currentSampleSpeed);
+		SetRMS(analyzerThreadData->sampleArray, surroundingCrossValues, &analyzerThreadData->AlarmMonitoringData->RMS);
+		AlarmMonitoring(&analyzerThreadData->AlarmMonitoringData);
 
-        SetNewSamplePeriod(ticksPerSample, surroundingCrossValues, sampleCount);
+		float currentSampleSpeed = (CurrentFrequency * SAMPLES_PER_CYCLE); // samples per second
+		uint32_t ticksPerSample = (uint32_t)(ModuleClock / currentSampleSpeed);
+
+		SetNewSamplePeriod(ticksPerSample, surroundingCrossValues, sampleCount);
 
       }
       analyzerThreadData->fillNewSamples = true;

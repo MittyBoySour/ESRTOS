@@ -112,10 +112,11 @@ void PIT_Update(float deviation, uint8_t channelNb)
   // Clear pending interrupts on the PIT (w1c)
   PIT_TFLG(channelNb + 1) = PIT_TFLG_TIF_MASK;
 
-  // newLoad -= OS_TimerGet();
+  newLoad -= OS_TimeGet();
 
-  // Setting PIT_LDVAL to period in nanoseconds converted to moduleClk ticks
-  PIT_LDVAL(channelNb + 1) = (uint32_t)newLoad;
+  if (newLoad > 1)
+    // Setting PIT_LDVAL to period in nanoseconds converted to moduleClk ticks
+    PIT_LDVAL(channelNb + 1) = (uint32_t)newLoad;
 
   // Enable the timer and interrupts
   Enable(true, (channelNb + 1));
