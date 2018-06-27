@@ -4,6 +4,7 @@
 
 #include "analog.h"
 #include "OS.h"
+#include "PIT.h"
 
 static TPITData PITData;
 static uint32_t ModuleClock;
@@ -73,7 +74,7 @@ void PIT_Set(const uint32_t sampleTickPeriod, const bool restart, const bool fre
 void PIT_Update(float deviation, bool start, uint8_t channelNb)
 {
 
-  OS_TimeSet(0);
+  // OS_TimeSet(0);
   uint32_t loadValue = (5 * ModuleClock); // 5 seconds
   uint32_t currentValue = 0;
 
@@ -83,10 +84,24 @@ void PIT_Update(float deviation, bool start, uint8_t channelNb)
 
   }
 
-  float newLoad = (0.5 / deviation) * loadValue
-      * ((loadValue - currentValue) / loadValue);
+  float deviationFactor = ((1 / 2) / deviation);
+  float timeRemainingFactor = ((loadValue - currentValue) / loadValue);
 
+  float newLoad = deviationFactor * loadValue * timeRemainingFactor;
 
+  // Disable the timer and interrupts first
+  Enable(false, (channelNb + 1));
+
+  // Clear pending interrupts on the PIT (w1c)
+  PIT_TFLG(channelNb + 1) = PIT_TFLG_TIF_MASK;
+
+  // newLoad -= OS_TimerGet();
+
+  // Setting PIT_LDVAL to period in nanoseconds converted to moduleClk ticks
+  PIT_LDVAL(channelNb + 1) = (uint32_t)newLoad;
+
+  // Enable the timer and interrupts
+  Enabled(true, (channelNb + 1));
 
 }
 

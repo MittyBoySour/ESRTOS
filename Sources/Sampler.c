@@ -7,6 +7,7 @@
 
 
 #include "OS.h"
+#include "PIT.h"
 
 // ----------------------------------------
 // Frequency / Sampling set up
@@ -47,13 +48,14 @@ volatile extern static TAnalyzerThreadData AnalyzerThreadData[NB_SAMPLER_CHANNEL
 
 // Global data
 static bool InverseTimingModeEnabled;
-static float Frequency; // possibly needs to be float
+static float CurrentFrequency;
 
 Sampler_Init(const uint32_t moduleClk) // May have to be thread
 {
   // Initial setup
   ModuleClock = moduleClk;
   InverseTimingModeEnabled = false;
+  CurrentFrequency = HFR;
 
 }
 
@@ -137,7 +139,7 @@ void AnalyzerThread(void* pData)
     // wait on samplesReady semaphore
     OS_SemaphoreWait(analyzerThreadData->SamplerFullSemaphore, 0);
     // start timer
-    // OS_TimerSet(0);
+    OS_TimerSet(0);
 
     for (;;)
     {
@@ -184,8 +186,8 @@ void AnalyzerThread(void* pData)
 void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
 {
 
-  uint32_t maxSampleSpeed = HFR * SAMPLES_PER_CYCLE; // samples per second
-  uint32_t ticksPerSample = ModuleClock / maxSampleSpeed;
+  uint32_t maxSampleSpeed = (2 * HFR * (SAMPLES_PER_CYCLE / 2)); // samples per second
+  uint32_t ticksPerSample = (uint32_t)(ModuleClock / maxSampleSpeed);
 
   // continue waiting on and taking samples until 3 crossings found
   uint8_t crossCount;
@@ -193,8 +195,7 @@ void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
   int32_t surroundingCrossValues[4];
   int8_t sampleCount = 0;
   // set PIT
-  PIT_Set(ticksPerSample, true, false, true); // period, restart, alarm, frequencyTracking, data (ptrStorage, chan, sem)
-
+  PIT_Set(ticksPerSample, true, true);
   // wait on first value
   OS_SemaphoreWait(TrackingSemaphore, 0); // maybe drop out if an error
   // place first sample into previous for comparison
@@ -226,14 +227,10 @@ void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
     if (inWindow)
       sampleCount++;
   }
-  // calculate and interpolate freq (linear to start with)
-  uint32_t waveStart = LinearlyInterpolate(ticksPerSample, surroundingCrossValues[1], surroundingCrossValues[0]);
-  uint32_t waveEnd = LinearlyInterpolate(ticksPerSample, surroundingCrossValues[2], surroundingCrossValues[3]);
 
-  // store freq into passed freq param
-  uint32_t newSamplePeriod = waveStart + ((sampleCount - 1) * ticksPerSample) + waveEnd;
+  SetNewSamplePeriod(ticksPerSample, surroundingCrossValues, sampleCount);
 
-  PIT_Set(newSamplePeriod);
+  StoreNewFrequency(&CurrentFrequency);
 }
 
 bool PolarityChange(int32_t firstValue, int32_t secondValue)
@@ -245,10 +242,29 @@ bool PolarityChange(int32_t firstValue, int32_t secondValue)
 
 uint32_t LinearlyInterpolate(const uint32_t ticksPerSample, const int32_t inCycleValue, const int32_t outOfCycleValue)
 {
+
   int32_t sampleAmpChange = abs(inCycleValue) + abs(outOfCycleValue);
   int32_t inCycleAmpChange = abs(inCycleValue - 0);
-  int32_t partialSample = ticksPerSample * (inCycleAmpChange / sampleAmpChange);
+  uint32_t partialSample = (uint32_t)(ticksPerSample * ((float)inCycleAmpChange / (float)sampleAmpChange));
   return partialSample;
+}
+
+void SetNewSamplePeriod(const uint32_t ticksPerSample, const uint32_t surroundingCrossValues[4], uint8_t sampleCount)
+{
+  // calculate and interpolate freq (linear to start with)
+  uint32_t waveStart = LinearlyInterpolate(ticksPerSample, surroundingCrossValues[1], surroundingCrossValues[0]);
+  uint32_t waveEnd = LinearlyInterpolate(ticksPerSample, surroundingCrossValues[2], surroundingCrossValues[3]);
+
+  // store freq into passed freq param
+  uint32_t newSamplePeriod = waveStart + ((sampleCount - 1) * ticksPerSample) + waveEnd;
+
+  PIT_Set(newSamplePeriod, true, false);
+
+}
+
+void StoreNewFrequency(const float* currentFrequency)
+{
+
 }
 
 void PassSampleThread(void* pData)
@@ -261,7 +277,7 @@ void PassSampleThread(void* pData)
   {
     // wait on TimerCompleteSemaphore
     OS_SemaphoreWait(passSampleData->PITDataSampleTakenSemaphore, 0);
-    // store pointer into array asap
+
     OS_DisableInterrupts();
     for (int channelNb = 0; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
     {
