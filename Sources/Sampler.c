@@ -40,29 +40,6 @@ static uint32_t SamplerThreadStacks[NB_SAMPLER_CHANNELS][THREAD_STACK_SIZE] __at
 // ----------------------------------------
 const uint8_t SAMPLER_THREAD_PRIORITIES[NB_SAMPLER_CHANNELS] = {1, 2, 3};
 
-/*! @brief Data structure used to pass Analog configuration to a user thread
- *
- */
-typedef struct SamplerThreadData
-{
-  OS_ECB* AlarmSemaphore;
-  OS_ECB* StoreSampleSemaphore;
-  OS_ECB* AnalyzeSamplesSemaphore;
-  uint8_t channelNb;
-  int32_t analogSample;
-  typedef struct SamplerData
-  {
-    uint8_t iterator;
-    bool samplerFull;
-    uint8_t crossCount;
-    int32_t analogSamples[SAMPLES_ARRAY_SIZE];
-    uint8_t crossPositions[SAMPLE_WINDOW_SIZE];
-  } TSamplerData;
-} TSamplerThreadData; // TODO: WE WILL HAVE TO BREAK THIS UP
-
-/*! @brief Analog thread configuration data
- *
- */
 
 volatile extern static TPassSampleData PassSampleData;
 volatile extern static TPITData PITData;
@@ -72,76 +49,29 @@ volatile extern static TAnalyzerThreadData AnalyzerThreadData[NB_SAMPLER_CHANNEL
 static bool InverseTimingModeEnabled;
 static float Frequency; // possibly needs to be float
 
-Sampler_Init(const uint32_t moduleClk, TPITData PITData) // May have to be thread
+Sampler_Init(const uint32_t moduleClk) // May have to be thread
 {
   // Initial setup
   ModuleClock = moduleClk;
   InverseTimingModeEnabled = false;
-  // PIT_Init
-  PIT_Init(PITData);
-
-  // Shared thread data
-  // SamplePasser data
-  PassSampleData.PITDataSampleTakenSemaphore = OS_SemaphoreCreate(0);
-  TPassSampleChannelData PassSampleChannelData[NB_SAMPLER_CHANNELS];
-  for (int i = 0; i < NB_SAMPLER_CHANNELS; i++)
-  {
-    PassSampleChannelData[i].SamplerFullSemaphore = OS_SemaphoreCreate(0);
-    PassSampleChannelData[i].channelNb = i;
-    PassSampleChannelData[i].iterator = 0;
-  };
-
-  // PIT data --> this may be used within other functions
-  PITData = ConvertPassSampleDataToPITData(PassSampleData);
-  // Analyzer data
-  for (int channelNb = 0; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
-  {
-    AnalyzerThreadData[channelNb] = ConvertPassSampleDataToAnalyzerThreadData(PassSampleData, channelNb);
-  }
-}
-
-// SamplerThread --> runs threads and calls initial setup too
-void SamplerManagerThread(void* pData)
-{
-  // convert freq to ticksPerSample
-  uint32_t ticksPerSample = ModuleClock / (FrequencyTrackerData->matchedFrequency * SAMPLES_PER_CYCLE);
-  // Pass the new set sampling freq to PIT --> restart: true, alarm: false
-  PIT_Set(ticksPerSample, true, false, &PITData);
-
-  // PassSampleThread --> 1 thread
-  error = OS_ThreadCreate(PassSampleThread,
-                          &PassSampleData,
-                          &InitModulesThreadStack[THREAD_STACK_SIZE - 1],
-                          6); // pass sample thread priority --> need PIT_ISR at 7 possibly
-
-  // Analyzer thread --> 3 threads
-  for (int threadNb = 0; threadNb < NB_SAMPLER_CHANNELS; threadNb++)
-  {
-    error = OS_ThreadCreate(AnalyzerThread,
-                            &AnalyzerThreadData[threadNb],
-                            &SamplerThreadStacks[threadNb][THREAD_STACK_SIZE - 1],
-                            SAMPLER_THREAD_PRIORITIES[threadNb]); // analyzer thread priority
-  }
 
 }
 
-// no need to be a thread
 void AlarmMonitoring(TAlarmMonitoringData RMSData)
 {
   //initial data
   #define RMSData ((TAlarmMonitoringData*)pData)
-  OS_SemaphoreWait(RMSData->VoltageCalculatedSemaphore, 0);
 
   uint32_t RMS = RMSData->RMS;
   uint32_t DeviationValue;
   // deviation = Deviation(RMS, &DeviationValue);
-  if (alarmingHigh)
+  if (RMSData->alarmingHigh)
   {
     if (!BeyondHighBound(RMS))
     // No longer alarming
     {
-      alarmingHigh = false;
-      PIT_DisableAlarm();
+      RMSData->alarmingHigh = false;
+      PIT_Disable(RMSData->channelNb);
     }
     else
     {
@@ -149,13 +79,13 @@ void AlarmMonitoring(TAlarmMonitoringData RMSData)
         PIT_Update();
     }
   }
-  else if (alarmingLow)
+  else if (RMSData->alarmingLow)
   {
     if (!BeyondLowBound(RMS))
     // No longer alarming
     {
-      alarmingLow = false;
-      PIT_DisableAlarm();
+      RMSData->alarmingLow = false;
+      PIT_Disable(RMSData->channelNb);
     }
     else
     {
@@ -171,13 +101,15 @@ void AlarmControlThread(void* pData)
   // shared vars
   #define alarmControlThreadData ((TAlarmControlThreadData*)pData)
 
+  // at end put local var = to either 5 or nothing
+
   OS_SemaphoreWait(alarmControlThreadData->PITDataSampleTakenSemaphore, 0);
 
-  PIT_Disable();
+  PIT_Disable(alarmControlThreadData->channelNb);
 
   if (alarmControlThreadData->alarmingHigh)
   {
-    if (BeyondHighBound(RMS))
+    if (BeyondHighBound(alarmControlThreadData->RMS))
     {
       VoltageRaiseEvent();
       alarmControlThreadData->alarmingHigh = false;
@@ -193,8 +125,6 @@ void AlarmControlThread(void* pData)
     }
   }
 
-  // any necessary resetting
-
 }
 
 // consider 3 threads for this one rather than one as it will be less messy
@@ -202,50 +132,48 @@ void AnalyzerThread(void* pData)
 {
   #define analyzerThreadData ((TAnalyzerThreadData*)pData)
 
-  // Alarm monitoring thread will have already been initialised with shared values
-
-  // wait on samplesReady semaphore
-  OS_SemaphoreWait(analyzerThreadData->SamplerFullSemaphore, 0);
-  // start timer
-  // OS_TimerSet(0);
-
   for (;;)
   {
-    // get crosses
-    uint8_t crossPositions[SAMPLER_WINDOW_CROSSES];
-    uint8_t crossesCount;
-    for (uint8_t iterator = 1; iterator < SAMPLES_ARRAY_SIZE; iterator++)
+    // wait on samplesReady semaphore
+    OS_SemaphoreWait(analyzerThreadData->SamplerFullSemaphore, 0);
+    // start timer
+    // OS_TimerSet(0);
+
+    for (;;)
     {
-      int32_t previous = analyzerThreadData->sampleArray[iterator-1];
-      int32_t current = analyzerThreadData->sampleArray[iterator];
-      if (polarityChange(previous, current))
+      // get crosses
+      uint8_t crossPositions[SAMPLER_WINDOW_CROSSES];
+      uint8_t crossesCount;
+      for (uint8_t iterator = 1; iterator < SAMPLES_ARRAY_SIZE; iterator++)
       {
-        crossPositions[crossesCount++] = iterator;
-        if (crossesCount == 3)
-          break;
+        int32_t previous = analyzerThreadData->sampleArray[iterator-1];
+        int32_t current = analyzerThreadData->sampleArray[iterator];
+        if (polarityChange(previous, current))
+        {
+          crossPositions[crossesCount++] = iterator;
+          if (crossesCount == 3)
+            break;
+        }
       }
-    }
-    // if window size is incorrect
-    if (!(crossesCount == 3 && (crossPositions[2] - crossPositions[0]) >= 15))
-    {
-      // while this is a long process, there is no point servicing any interrupts until frequency is matched
-      OS_DisableInterrupts();
-      PIT_Disable();
-      FrequencyMatcher();
-      OS_EnableInterrupts();
-    }
-    //
-    else
-    {
-      GetRMS(analyzerThreadData->sampleArray);
-      AlarmMonitoring();
-    }
-    analyzerThreadData->fillNewSamples = true;
+      // if window size is incorrect
+      if (!(crossesCount == 3 && (crossPositions[2] - crossPositions[0]) >= 15))
+      {
+        // while this is a long process, there is no point servicing any interrupts until frequency is matched
+        OS_DisableInterrupts();
+        PIT_Disable();
+        FrequencyMatcher();
+        OS_EnableInterrupts();
+      }
+      //
+      else
+      {
+        GetRMS(analyzerThreadData->sampleArray, &analyzerThreadData->AlarmMonitoringData->RMS);
+        AlarmMonitoring(analyzerThreadData->AlarmMonitoringData);
+        UpdateFrequency(analyzerThreadData->sampleArray);
+      }
+      analyzerThreadData->fillNewSamples = true;
 
-    // check voltage limits
-      // signal new voltage calculated
-
-    // send bool readyForMoreSamples
+    }
 
   }
 }
@@ -256,7 +184,7 @@ void AnalyzerThread(void* pData)
 void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
 {
 
-  uint8_t maxSampleSpeed = HFR * SAMPLES_PER_CYCLE; // samples per second
+  uint32_t maxSampleSpeed = HFR * SAMPLES_PER_CYCLE; // samples per second
   uint32_t ticksPerSample = ModuleClock / maxSampleSpeed;
 
   // continue waiting on and taking samples until 3 crossings found

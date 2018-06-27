@@ -6,6 +6,7 @@
 #include "OS.h"
 
 static TPITData PITData;
+static uint32_t ModuleClock;
 static bool FrequencyTracking;
 static uint32_t SampleTickPeriod;
 
@@ -18,9 +19,10 @@ static uint32_t SampleTickPeriod;
  *  @return bool - TRUE if the PIT was successfully initialized.
  *  @note Assumes that moduleClk has a period which can be expressed as an integral number of nanoseconds.
  */
-bool PIT_Init(TPITData pITData) {
+bool PIT_Init(const uint32_t moduleClk, TPITData pITData) {
 
-  PITData = pITData
+  ModuleClock = moduleClk;
+  PITData = pITData;
 
   // Enable clock gate to PIT module
   SIM_SCGC6 |= SIM_SCGC6_PIT_MASK;
@@ -53,7 +55,7 @@ void PIT_Set(const uint32_t sampleTickPeriod, const bool restart, const bool fre
 
   if (restart) {
     // Disable the timer and interrupts first
-    PIT_Enable(false);
+    Enable(false, 0);
 
     // Clear pending interrupts on the PIT (w1c)
     PIT_TFLG0 = PIT_TFLG_TIF_MASK;
@@ -64,15 +66,15 @@ void PIT_Set(const uint32_t sampleTickPeriod, const bool restart, const bool fre
   PIT_LDVAL0 = sampleTickPeriod;
 
   // Enable the timer and interrupts
-  PIT_Enable(true);
+  Enabled(true, 0);
 
 }
 
-void PIT_UpdateAlarm(uint8_t deviation, bool start, uint8_t channelNb)
+void PIT_Update(float deviation, bool start, uint8_t channelNb)
 {
 
   OS_TimeSet(0);
-  uint32_t loadValue = PIT_LDVAL(channelNb); // 5 seconds
+  uint32_t loadValue = (5 * ModuleClock); // 5 seconds
   uint32_t currentValue = 0;
 
   if (!start) {
@@ -81,15 +83,23 @@ void PIT_UpdateAlarm(uint8_t deviation, bool start, uint8_t channelNb)
 
   }
 
+  float newLoad = (0.5 / deviation) * loadValue
+      * ((loadValue - currentValue) / loadValue);
 
 
+
+}
+
+void PIT_Disable(uint8_t channelNb)
+{
+  Enable(false, channelNb);
 }
 
 /*! @brief Enables or disables the PIT.
  *
  *  @param enable - TRUE if the PIT is to be enabled, FALSE if the PIT is to be disabled.
  */
-void PIT_Enable(const bool enable) {
+void Enable(const bool enable) {
 
   if (enable) {
     // Enable timer and interrupts

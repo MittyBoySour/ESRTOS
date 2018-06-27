@@ -137,10 +137,8 @@ typedef struct AnalyzerThreadData
 
 typedef struct AlarmMonitoringData
 {
-  OS_ECB* PITDataSampleTakenSemaphore;
-  uint8_t channelNb; // not needed
   uint32_t RMS;
-  OS_ECB* VoltageCalculatedSemaphore;
+  uint8_t channelNb;
   bool alarmingHigh;
   bool alarmingLow;
 } TAlarmMonitoringData;
@@ -149,6 +147,7 @@ typedef struct AlarmControlThreadData
 {
   OS_ECB* PITAlarmSemaphore;
   uint8_t channelNb; // may not be needed
+  uint32_t RMS;
   bool alarmingHigh;
   bool alarmingLow;
 } TAlarmControlThreadData;
