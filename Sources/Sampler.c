@@ -5,12 +5,7 @@
  *      Author: 11238639
  */
 
-#include <math.h>
-
-#include "OS.h"
-#include "PIT.h"
-#include "types.h"
-
+#include "Sampler.h"
 // ----------------------------------------
 // Scaling Factors
 // ----------------------------------------
@@ -25,7 +20,7 @@ static int32_t FiveVolts = (5 * 65536) / 65536;
 #define LFR 47.5 // Lowest frequency range
 #define HFR 52.5 // Highest frequency range
 #define SAMPLES_PER_CYCLE 16
-#define SAMPLES_ARRAY_SIZE 32 // may need to make larger to ensure always 2 zeros or just use freq thread
+#define SAMPLES_ARRAY_SIZE 32
 #define SAMPLER_WINDOW_CROSSES 3
 
 #define MICROSECOND 1000000
@@ -56,168 +51,22 @@ volatile extern TPITData PITData;
 volatile extern TAnalyzerThreadData AnalyzerThreadData[NB_SAMPLER_CHANNELS];
 
 // Global data
-static bool InverseTimingModeEnabled;
 static float CurrentFrequency;
 
 bool Sampler_Init(const uint32_t moduleClk)
 {
   // Initial setup
   ModuleClock = moduleClk;
-  InverseTimingModeEnabled = false;
   CurrentFrequency = HFR;
 
-}
-
-bool BeyondHighBound(const float RMS)
-{
-	if (RMS > HighVoltageBound)
-		return true;
-	else
-		return false;
-}
-
-bool BeyondLowBound(const float RMS)
-{
-	if (RMS < LowVoltageBound)
-		return true;
-	else
-		return false;
-}
-
-float GetDeviation(const float* RMS)
-{
-	if (*RMS > 3)
-		return *RMS - 3;
-	else
-		return 2 - *RMS;
 }
 
 bool PolarityChange(const int32_t firstValue, const int32_t secondValue)
 {
 
-  bool firstStatePos = firstValue > 0;
-  bool secondStatePos = secondValue > 0;
+  bool firstStatePos = firstValue >= 0;
+  bool secondStatePos = secondValue >= 0;
   return (firstStatePos != secondStatePos);
-
-}
-
-void SetRMS(const uint32_t sampleArray[SAMPLES_ARRAY_SIZE], const uint8_t surroundingCrossValues[4], float* RMS)
-{
-
-  uint8_t cycleStart = surroundingCrossValues[1];
-  uint8_t cycleEnd = surroundingCrossValues[2];
-
-  float allSquared = 0;
-
-  for (uint8_t iterator = cycleStart; iterator < cycleEnd; iterator++)
-  {
-	allSquared += (sampleArray[iterator] * sampleArray[iterator]);
-  }
-
-  float meanSquared = allSquared * (1 / (cycleEnd - cycleStart));
-
-  // store result in passed and return any error
-  *RMS = sqrt(meanSquared);
-}
-
-void AlarmMonitoring(TAlarmMonitoringData* RMSData)
-{
-  //initial data
-  float RMS = RMSData->RMS;
-  uint32_t DeviationValue;
-  // deviation = Deviation(RMS, &DeviationValue);
-  if (RMSData->alarmingHigh)
-  {
-    if (!BeyondHighBound(RMS))
-    // No longer alarming
-    {
-      RMSData->alarmingHigh = false;
-      PIT_Disable(RMSData->channelNb);
-      Analog_Put(0, 0);
-    }
-    else
-    {
-      if (InverseTimingModeEnabled)
-        PIT_Update(GetDeviation(&RMS), RMSData->channelNb);
-    }
-  }
-  else if (RMSData->alarmingLow)
-  {
-    if (!BeyondLowBound(RMS))
-    // No longer alarming
-    {
-      RMSData->alarmingLow = false;
-      PIT_Disable(RMSData->channelNb);
-      Analog_Put(1, 0);
-    }
-    else
-    {
-      if (InverseTimingModeEnabled)
-        PIT_Update(GetDeviation(&RMS), RMSData->channelNb);
-    }
-  }
-  else
-  {
-    if (BeyondHighBound(RMS))
-    {
-      RMSData->alarmingHigh = true;
-      Analog_Put(0, FiveVolts);
-    }
-    else if (BeyondLowBound(RMS))
-    {
-	  RMSData->alarmingLow = true;
-	  Analog_Put(1, FiveVolts);
-    }
-  }
-
-}
-
-void VoltageRaiseEvent()
-{
-	Analog_Put(3, FiveVolts);
-	Analog_Put(0, 0);
-}
-
-void VoltageLowerEvent()
-{
-	Analog_Put(3, FiveVolts);
-	Analog_Put(1, 0);
-}
-
-void AlarmControlThread(void* pData)
-{
-  // shared vars
-  #define alarmControlThreadData ((TAlarmControlThreadData*)pData)
-
-  // at end put local var = to either 5 or nothing
-  float RMS = alarmControlThreadData->RMS;
-
-  for (;;)
-  {
-	  OS_SemaphoreWait(alarmControlThreadData->PITAlarmSemaphore, 0);
-
-	  PIT_Disable(alarmControlThreadData->channelNb);
-
-	  if (alarmControlThreadData->alarmingHigh)
-	  {
-	    if (BeyondHighBound(RMS))
-	    {
-	      VoltageRaiseEvent();
-	      alarmControlThreadData->alarmingHigh = false;
-	    }
-
-	  }
-	  else if (alarmControlThreadData->alarmingLow)
-	  {
-	    if (BeyondLowBound(RMS))
-	    {
-	      VoltageLowerEvent();
-	      alarmControlThreadData->alarmingLow = false;
-	    }
-	  }
-
-  }
-
 
 }
 
@@ -250,22 +99,28 @@ void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
   float maxSampleSpeed = HFR * SAMPLES_PER_CYCLE; // samples per second
   uint32_t ticksPerSample = (uint32_t)(ModuleClock / maxSampleSpeed);
 
-  // continue waiting on and taking samples until 3 crossings found
+  // internal thread data
   uint8_t crossCount = 0;
   bool inWindow = false;
   int32_t surroundingCrossValues[4];
   int8_t sampleCount = 0;
+
   // set PIT
   PIT_Set(ticksPerSample, true, true);
-  // wait on first value
-  OS_SemaphoreWait(TrackingSemaphore, 0); // maybe drop out if an error
+
+  // wait on first value from PIT
+  OS_SemaphoreWait(TrackingSemaphore, 0);
+
   // place first sample into previous for comparison
   int32_t previousValue = *analogSample;
   int32_t currentValue;
+
+  // look for crosses
   while (crossCount < SAMPLER_WINDOW_CROSSES) // 3
   {
     OS_SemaphoreWait(TrackingSemaphore, 0);
     currentValue = *analogSample;
+
     // check for crossing and update crossing values and count
     if (PolarityChange(previousValue, currentValue))
     {
@@ -295,7 +150,7 @@ void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
   CurrentFrequency = ModuleClock / periodInTicks;
 }
 
-// consider 3 threads for this one rather than one as it will be less messy
+
 void AnalyzerThread(void* pData)
 {
   #define analyzerThreadData ((TAnalyzerThreadData*)pData)
@@ -335,6 +190,7 @@ void AnalyzerThread(void* pData)
       //
       else
       {
+    	// get surrounding cross values for RMS calculation and minor frequency updates
 		uint8_t sampleCount = crossPositions[2] - crossPositions[0];
 		uint32_t surroundingCrossValues[4];
 		surroundingCrossValues[0] = analyzerThreadData->sampleArray[crossPositions[0] - 1];
@@ -342,9 +198,13 @@ void AnalyzerThread(void* pData)
 		surroundingCrossValues[2] = analyzerThreadData->sampleArray[crossPositions[2] - 1];
 		surroundingCrossValues[3] = analyzerThreadData->sampleArray[crossPositions[2]];
 
+		// set the RMS value for retrieval and alarm monitoring
 		SetRMS(analyzerThreadData->sampleArray, surroundingCrossValues, &analyzerThreadData->AlarmMonitoringData->RMS);
+
+		// perform alarm monitoring
 		AlarmMonitoring(&analyzerThreadData->AlarmMonitoringData);
 
+		// Perform minor frequency tracking update and store new frequency
 		float currentSampleSpeed = (CurrentFrequency * SAMPLES_PER_CYCLE); // samples per second
 		uint32_t ticksPerSample = (uint32_t)(ModuleClock / currentSampleSpeed);
 
@@ -403,7 +263,3 @@ void PassSampleThread(void* pData)
 
 }
 
-void setTimingMode(const bool inverse)
-{
-  InverseTimingModeEnabled = inverse; // if !inverse --> in definite timing mode;
-}

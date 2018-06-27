@@ -8,9 +8,11 @@
 #include "CPU.h"
 #include "OS.h"
 #include "types.h"
+/*
 #include "analog.h"
-#include "sampler.h"
-
+#include "Sampler.h"
+#include "AlarmMonitor.h"
+*/
 // ----------------------------------------
 // Thread set up
 // ----------------------------------------
@@ -130,6 +132,8 @@ static void InitModulesThread(void* pData)
 
   PIT_Init(&PITData);
 
+  AlarmMonitor_Init();
+
   // We only do this once - therefore delete this thread
   OS_ThreadDelete(OS_PRIORITY_SELF);
 }
@@ -152,6 +156,7 @@ int main(void)
                           &InitModulesThreadStack[THREAD_STACK_SIZE - 1],
                           0); // Highest priority
 
+  /*
   error = OS_ThreadCreate(PassSampleThread,
                           &PassSampleData,
                           &InitModulesThreadStack[THREAD_STACK_SIZE - 1],
@@ -173,6 +178,7 @@ int main(void)
                             ALARM_CONTROL_THREAD_PRIORITIES[threadNb]);
   }
 
+	*/
   // Start multithreading - never returns!
   OS_Start();
 }

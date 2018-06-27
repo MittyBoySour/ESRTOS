@@ -8,7 +8,13 @@
 #ifndef SOURCES_SAMPLER_H_
 #define SOURCES_SAMPLER_H_
 
+#include <math.h>
+
+#include "OS.h"
+#include "PIT.h"
 #include "types.h"
+#include "AlarmMonitor.h"
+
 
 bool Sampler_Init(const uint32_t moduleClk);
 
