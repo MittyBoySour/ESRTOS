@@ -15,7 +15,8 @@
 // Scaling Factors
 // ----------------------------------------
 static int32_t HighVoltageBound = (3 * 65536) / 65536;
-static int32_t HighVoltageBound = (2 * 65536) / 65536;
+static int32_t LowVoltageBound = (2 * 65536) / 65536;
+static int32_t FiveVolts = (5 * 65536) / 65536;
 
 // ----------------------------------------
 // Frequency / Sampling set up
@@ -69,13 +70,18 @@ bool Sampler_Init(const uint32_t moduleClk)
 
 bool BeyondHighBound(const float RMS)
 {
-	if (RMS > )
-	return true;
+	if (RMS > HighVoltageBound)
+		return true;
+	else
+		return false;
 }
 
 bool BeyondLowBound(const float RMS)
 {
-	return true;
+	if (RMS < LowVoltageBound)
+		return true;
+	else
+		return false;
 }
 
 float GetDeviation(const float* RMS)
@@ -110,6 +116,7 @@ void AlarmMonitoring(TAlarmMonitoringData* RMSData)
     {
       RMSData->alarmingHigh = false;
       PIT_Disable(RMSData->channelNb);
+      Analog_Put(0, 0);
     }
     else
     {
@@ -124,6 +131,7 @@ void AlarmMonitoring(TAlarmMonitoringData* RMSData)
     {
       RMSData->alarmingLow = false;
       PIT_Disable(RMSData->channelNb);
+      Analog_Put(1, 0);
     }
     else
     {
@@ -131,17 +139,32 @@ void AlarmMonitoring(TAlarmMonitoringData* RMSData)
         PIT_Update(GetDeviation(&RMS), RMSData->channelNb);
     }
   }
+  else
+  {
+    if (BeyondHighBound(RMS))
+    {
+      RMSData->alarmingHigh = true;
+      Analog_Put(0, FiveVolts);
+    }
+    else if (BeyondLowBound(RMS))
+    {
+	  RMSData->alarmingLow = true;
+	  Analog_Put(1, FiveVolts);
+    }
+  }
 
 }
 
 void VoltageRaiseEvent()
 {
-
+	Analog_Put(3, FiveVolts);
+	Analog_Put(0, 0);
 }
 
 void VoltageLowerEvent()
 {
-
+	Analog_Put(3, FiveVolts);
+	Analog_Put(1, 0);
 }
 
 void AlarmControlThread(void* pData)
@@ -204,26 +227,14 @@ void SetNewSamplePeriod(const uint32_t ticksPerSample, const uint32_t surroundin
 
 }
 
-void StoreNewFrequency(const float* currentFrequency)
-{
-
-}
-
-
-void UpdateFrequency(const uint32_t* sampleArray[SAMPLES_ARRAY_SIZE])
-{
-
-}
-
-// TODO: check whether we need to use floats
 void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
 {
 
-  uint32_t maxSampleSpeed = (2 * HFR * (SAMPLES_PER_CYCLE / 2)); // samples per second
+  float maxSampleSpeed = HFR * SAMPLES_PER_CYCLE; // samples per second
   uint32_t ticksPerSample = (uint32_t)(ModuleClock / maxSampleSpeed);
 
   // continue waiting on and taking samples until 3 crossings found
-  uint8_t crossCount;
+  uint8_t crossCount = 0;
   bool inWindow = false;
   int32_t surroundingCrossValues[4];
   int8_t sampleCount = 0;
@@ -263,7 +274,8 @@ void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
 
   SetNewSamplePeriod(ticksPerSample, surroundingCrossValues, sampleCount);
 
-  StoreNewFrequency(&CurrentFrequency);
+  float periodInTicks = ticksPerSample * SAMPLES_PER_CYCLE;
+  CurrentFrequency = ModuleClock / periodInTicks;
 }
 
 // consider 3 threads for this one rather than one as it will be less messy
@@ -306,9 +318,20 @@ void AnalyzerThread(void* pData)
       //
       else
       {
-        SetRMS(analyzerThreadData->sampleArray, analyzerThreadData->AlarmMonitoringData->RMS);
+        SetRMS(analyzerThreadData->sampleArray, &analyzerThreadData->AlarmMonitoringData->RMS);
         AlarmMonitoring(&analyzerThreadData->AlarmMonitoringData);
-        UpdateFrequency(&analyzerThreadData->sampleArray);
+        uint8_t sampleCount = crossPositions[2] - crossPositions[0];
+        uint32_t surroundingCrossValues[4];
+        surroundingCrossValues[0] = analyzerThreadData->sampleArray[crossPositions[0] - 1];
+        surroundingCrossValues[1] = analyzerThreadData->sampleArray[crossPositions[0]];
+        surroundingCrossValues[2] = analyzerThreadData->sampleArray[crossPositions[2] - 1];
+        surroundingCrossValues[3] = analyzerThreadData->sampleArray[crossPositions[2]];
+
+        float currentSampleSpeed = (CurrentFrequency * SAMPLES_PER_CYCLE); // samples per second
+        uint32_t ticksPerSample = (uint32_t)(ModuleClock / currentSampleSpeed);
+
+        SetNewSamplePeriod(ticksPerSample, surroundingCrossValues, sampleCount);
+
       }
       analyzerThreadData->fillNewSamples = true;
 

@@ -99,7 +99,7 @@ typedef struct PITChannelData
 {
   OS_ECB* PITAlarmSemaphore;
   uint8_t channelNb;
-  int16_t analogSample; // pass struct in as ptr
+  int32_t analogSample; // pass struct in as ptr
 } TPITChannelData;
 
 typedef struct PITData
