@@ -42,6 +42,22 @@ bool PIT_Init(const uint32_t moduleClk, TPITData pITData) {
   return true;
 }
 
+/*! @brief Enables or disables the PIT.
+ *
+ *  @param enable - TRUE if the PIT is to be enabled, FALSE if the PIT is to be disabled.
+ */
+void Enable(const bool enable, const uint8_t pitNb) {
+
+  if (enable) {
+    // Enable timer and interrupts
+    PIT_TCTRL(pitNb) |= (PIT_TCTRL_TIE_MASK | PIT_TCTRL_TEN_MASK);
+  } else {
+    // Disables timer and interrupts
+    PIT_TCTRL(pitNb) &= ~(PIT_TCTRL_TIE_MASK | PIT_TCTRL_TEN_MASK);
+  }
+
+}
+
 /*! @brief Sets the value of the desired period of the PIT.
  *
  *  @param period The desired value of the timer period in nanoseconds.
@@ -67,21 +83,22 @@ void PIT_Set(const uint32_t sampleTickPeriod, const bool restart, const bool fre
   PIT_LDVAL0 = sampleTickPeriod;
 
   // Enable the timer and interrupts
-  Enabled(true, 0);
+  Enable(true, 0);
 
 }
 
-void PIT_Update(float deviation, bool start, uint8_t channelNb)
+void PIT_Update(float deviation, uint8_t channelNb)
 {
 
   // OS_TimeSet(0);
-  uint32_t loadValue = (5 * ModuleClock); // 5 seconds
-  uint32_t currentValue = 0;
 
-  if (!start) {
-    loadValue = PIT_LDVAL(channelNb);
-    currentValue = PIT_LDVAL(channelNb);
+  uint32_t loadValue = PIT_LDVAL(channelNb);
+  uint32_t currentValue = PIT_LDVAL(channelNb);
 
+  if (loadValue == 0)
+  {
+	  loadValue = (5 * ModuleClock); // 5 seconds
+	  currentValue = 0;
   }
 
   float deviationFactor = ((1 / 2) / deviation);
@@ -101,29 +118,13 @@ void PIT_Update(float deviation, bool start, uint8_t channelNb)
   PIT_LDVAL(channelNb + 1) = (uint32_t)newLoad;
 
   // Enable the timer and interrupts
-  Enabled(true, (channelNb + 1));
+  Enable(true, (channelNb + 1));
 
 }
 
 void PIT_Disable(uint8_t channelNb)
 {
   Enable(false, channelNb);
-}
-
-/*! @brief Enables or disables the PIT.
- *
- *  @param enable - TRUE if the PIT is to be enabled, FALSE if the PIT is to be disabled.
- */
-void Enable(const bool enable) {
-
-  if (enable) {
-    // Enable timer and interrupts
-    PIT_TCTRL0 |= (PIT_TCTRL_TIE_MASK | PIT_TCTRL_TEN_MASK);
-  } else {
-    // Disables timer and interrupts
-    PIT_TCTRL0 &= ~(PIT_TCTRL_TIE_MASK | PIT_TCTRL_TEN_MASK);
-  }
-
 }
 
 /*! @brief Interrupt service routine for the PIT.
@@ -138,7 +139,7 @@ void __attribute__ ((interrupt)) PIT1_ISR(void) {
 
   PIT_TFLG1 = PIT_TFLG_TIF_MASK;
 
-  OS_SemaphoreSignal(PITData.PITChannelData[0].PITAlarmSemaphore);
+  OS_SemaphoreSignal(PITData.PITChannelData[0]->PITAlarmSemaphore);
 
   OS_ISRExit();
 
@@ -150,7 +151,7 @@ void __attribute__ ((interrupt)) PIT2_ISR(void) {
 
   PIT_TFLG1 = PIT_TFLG_TIF_MASK;
 
-  OS_SemaphoreSignal(PITData.PITChannelData[1].PITAlarmSemaphore);
+  OS_SemaphoreSignal(PITData.PITChannelData[1]->PITAlarmSemaphore);
 
   OS_ISRExit();
 
@@ -162,7 +163,7 @@ void __attribute__ ((interrupt)) PIT3_ISR(void) {
 
   PIT_TFLG1 = PIT_TFLG_TIF_MASK;
 
-  OS_SemaphoreSignal(PITData.PITChannelData[2].PITAlarmSemaphore);
+  OS_SemaphoreSignal(PITData.PITChannelData[2]->PITAlarmSemaphore);
 
   OS_ISRExit();
 
@@ -177,8 +178,7 @@ void __attribute__ ((interrupt)) PIT0_ISR(void) {
 
   if (FrequencyTracking)
   {
-
-    Analog_Get(0, &PITData.PITChannelData[0].analogSample);
+    Analog_Get(0, PITData.PITChannelData[0]->analogSample);
     OS_SemaphoreSignal(PITData.PITFrequencySampleTakenSemaphore);
   }
   else
@@ -186,7 +186,7 @@ void __attribute__ ((interrupt)) PIT0_ISR(void) {
     for (uint8_t channelNb; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
     {
       // take samples
-      Analog_Get(PITData.PITChannelData[channelNb].channelNb, &PITData.PITChannelData[channelNb].analogSample);
+      Analog_Get(PITData.PITChannelData[channelNb]->channelNb, PITData.PITChannelData[channelNb]->analogSample);
     }
     // signal semaphore
     OS_SemaphoreSignal(PITData.PITDataSampleTakenSemaphore);

@@ -14,6 +14,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "OS.h"
+
 // ----------------------------------------
 // Frequency / Sampling set up
 // ----------------------------------------
@@ -93,25 +95,19 @@ typedef union
 // Thread data passing
 
 // struct to allow easy passing of data to PIT module
-typedef struct PITData
-{
-  OS_ECB* PITDataSampleTakenSemaphore;
-  OS_ECB* PITFrequencySampleTakenSemaphore;
-  TPITChannelData PITChannelData[NB_SAMPLER_CHANNELS];
-} TPITData;
-
 typedef struct PITChannelData
 {
   OS_ECB* PITAlarmSemaphore;
   uint8_t channelNb;
-  int32_t analogSample; // pass struct in as ptr
+  int16_t analogSample; // pass struct in as ptr
 } TPITChannelData;
 
-typedef struct PassSampleData
+typedef struct PITData
 {
-  OS_ECB* PITDataSampleTakenSemaphore; // shared with PIT module
-  TPassSampleChannelData PassSampleChannelData[NB_SAMPLER_CHANNELS];
-} TPassSampleData;
+  OS_ECB* PITDataSampleTakenSemaphore;
+  OS_ECB* PITFrequencySampleTakenSemaphore;
+  TPITChannelData* PITChannelData[NB_SAMPLER_CHANNELS];
+} TPITData;
 
 typedef struct PassSampleChannelData
 {
@@ -123,31 +119,38 @@ typedef struct PassSampleChannelData
   uint32_t sampleArray[SAMPLES_ARRAY_SIZE]; // shared with analyzer thread
 } TPassSampleChannelData;
 
+typedef struct PassSampleData
+{
+  OS_ECB* PITDataSampleTakenSemaphore; // shared with PIT module
+  TPassSampleChannelData* PassSampleChannelData[NB_SAMPLER_CHANNELS];
+} TPassSampleData;
+
+typedef struct AlarmMonitoringData
+{
+  float RMS;
+  uint8_t channelNb;
+  bool alarmingHigh;
+  bool alarmingLow;
+} TAlarmMonitoringData;
+
 typedef struct AnalyzerThreadData
 {
   OS_ECB* SamplerFullSemaphore;
   OS_ECB* FrequencyTrackerSemaphore;
   uint8_t channelNb;
   uint8_t iterator;
+  int32_t analogSample; // pass struct in as ptr
   uint32_t sampleArray[SAMPLES_ARRAY_SIZE];
   bool analyzerReady;
   bool fillNewSamples;
-  TAlarmMonitoringData AlarmMonitoringData;
+  TAlarmMonitoringData* AlarmMonitoringData;
 } TAnalyzerThreadData;
-
-typedef struct AlarmMonitoringData
-{
-  uint32_t RMS;
-  uint8_t channelNb;
-  bool alarmingHigh;
-  bool alarmingLow;
-} TAlarmMonitoringData;
 
 typedef struct AlarmControlThreadData
 {
   OS_ECB* PITAlarmSemaphore;
   uint8_t channelNb; // may not be needed
-  uint32_t RMS;
+  float RMS;
   bool alarmingHigh;
   bool alarmingLow;
 } TAlarmControlThreadData;

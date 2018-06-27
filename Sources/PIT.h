@@ -8,11 +8,11 @@
 #ifndef SOURCES_PIT_H_
 #define SOURCES_PIT_H_
 
+#include "types.h"
+
 bool PIT_Init(const uint32_t moduleClk, TPITData pITData);
 
-void PIT_Update(float deviation, bool start, uint8_t channelNb);
-
-void PIT_Update(float deviation, bool start, uint8_t channelNb);
+void PIT_Update(float deviation, uint8_t channelNb);
 
 void PIT_Disable(uint8_t channelNb);
 

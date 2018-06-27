@@ -5,9 +5,17 @@
  *      Author: 11238639
  */
 
+#include <stdint.h>
 
 #include "OS.h"
 #include "PIT.h"
+#include "types.h"
+
+// ----------------------------------------
+// Scaling Factors
+// ----------------------------------------
+static int32_t HighVoltageBound = (3 * 65536) / 65536;
+static int32_t HighVoltageBound = (2 * 65536) / 65536;
 
 // ----------------------------------------
 // Frequency / Sampling set up
@@ -42,15 +50,15 @@ static uint32_t SamplerThreadStacks[NB_SAMPLER_CHANNELS][THREAD_STACK_SIZE] __at
 const uint8_t SAMPLER_THREAD_PRIORITIES[NB_SAMPLER_CHANNELS] = {1, 2, 3};
 
 
-volatile extern static TPassSampleData PassSampleData;
-volatile extern static TPITData PITData;
-volatile extern static TAnalyzerThreadData AnalyzerThreadData[NB_SAMPLER_CHANNELS];
+volatile extern TPassSampleData PassSampleData;
+volatile extern TPITData PITData;
+volatile extern TAnalyzerThreadData AnalyzerThreadData[NB_SAMPLER_CHANNELS];
 
 // Global data
 static bool InverseTimingModeEnabled;
 static float CurrentFrequency;
 
-Sampler_Init(const uint32_t moduleClk) // May have to be thread
+bool Sampler_Init(const uint32_t moduleClk)
 {
   // Initial setup
   ModuleClock = moduleClk;
@@ -59,12 +67,40 @@ Sampler_Init(const uint32_t moduleClk) // May have to be thread
 
 }
 
-void AlarmMonitoring(TAlarmMonitoringData RMSData)
+bool BeyondHighBound(const float RMS)
+{
+	if (RMS > )
+	return true;
+}
+
+bool BeyondLowBound(const float RMS)
+{
+	return true;
+}
+
+float GetDeviation(const float* RMS)
+{
+	return (float)0;
+}
+
+bool PolarityChange(const int32_t firstValue, const int32_t secondValue)
+{
+
+  bool firstStatePos = firstValue > 0;
+  bool secondStatePos = secondValue > 0;
+  return (firstStatePos != secondStatePos);
+
+}
+
+void SetRMS(const uint32_t sampleArray[SAMPLES_ARRAY_SIZE], const float* RMS)
+{
+
+}
+
+void AlarmMonitoring(TAlarmMonitoringData* RMSData)
 {
   //initial data
-  #define RMSData ((TAlarmMonitoringData*)pData)
-
-  uint32_t RMS = RMSData->RMS;
+  float RMS = RMSData->RMS;
   uint32_t DeviationValue;
   // deviation = Deviation(RMS, &DeviationValue);
   if (RMSData->alarmingHigh)
@@ -78,7 +114,7 @@ void AlarmMonitoring(TAlarmMonitoringData RMSData)
     else
     {
       if (InverseTimingModeEnabled)
-        PIT_Update();
+        PIT_Update(GetDeviation(&RMS), RMSData->channelNb);
     }
   }
   else if (RMSData->alarmingLow)
@@ -92,9 +128,19 @@ void AlarmMonitoring(TAlarmMonitoringData RMSData)
     else
     {
       if (InverseTimingModeEnabled)
-        PIT_Update();
+        PIT_Update(GetDeviation(&RMS), RMSData->channelNb);
     }
   }
+
+}
+
+void VoltageRaiseEvent()
+{
+
+}
+
+void VoltageLowerEvent()
+{
 
 }
 
@@ -104,83 +150,70 @@ void AlarmControlThread(void* pData)
   #define alarmControlThreadData ((TAlarmControlThreadData*)pData)
 
   // at end put local var = to either 5 or nothing
-
-  OS_SemaphoreWait(alarmControlThreadData->PITDataSampleTakenSemaphore, 0);
-
-  PIT_Disable(alarmControlThreadData->channelNb);
-
-  if (alarmControlThreadData->alarmingHigh)
-  {
-    if (BeyondHighBound(alarmControlThreadData->RMS))
-    {
-      VoltageRaiseEvent();
-      alarmControlThreadData->alarmingHigh = false;
-    }
-
-  }
-  else if (alarmControlThreadData->alarmingLow)
-  {
-    if (BeyondLowBound(RMS))
-    {
-      VoltageLowerEvent();
-      alarmControlThreadData->alarmingLow = false;
-    }
-  }
-
-}
-
-// consider 3 threads for this one rather than one as it will be less messy
-void AnalyzerThread(void* pData)
-{
-  #define analyzerThreadData ((TAnalyzerThreadData*)pData)
+  float RMS = alarmControlThreadData->RMS;
 
   for (;;)
   {
-    // wait on samplesReady semaphore
-    OS_SemaphoreWait(analyzerThreadData->SamplerFullSemaphore, 0);
-    // start timer
-    OS_TimerSet(0);
+	  OS_SemaphoreWait(alarmControlThreadData->PITAlarmSemaphore, 0);
 
-    for (;;)
-    {
-      // get crosses
-      uint8_t crossPositions[SAMPLER_WINDOW_CROSSES];
-      uint8_t crossesCount;
-      for (uint8_t iterator = 1; iterator < SAMPLES_ARRAY_SIZE; iterator++)
-      {
-        int32_t previous = analyzerThreadData->sampleArray[iterator-1];
-        int32_t current = analyzerThreadData->sampleArray[iterator];
-        if (polarityChange(previous, current))
-        {
-          crossPositions[crossesCount++] = iterator;
-          if (crossesCount == 3)
-            break;
-        }
-      }
-      // if window size is incorrect
-      if (!(crossesCount == 3 && (crossPositions[2] - crossPositions[0]) >= 15))
-      {
-        // while this is a long process, there is no point servicing any interrupts until frequency is matched
-        OS_DisableInterrupts();
-        PIT_Disable();
-        FrequencyMatcher();
-        OS_EnableInterrupts();
-      }
-      //
-      else
-      {
-        GetRMS(analyzerThreadData->sampleArray, &analyzerThreadData->AlarmMonitoringData->RMS);
-        AlarmMonitoring(analyzerThreadData->AlarmMonitoringData);
-        UpdateFrequency(analyzerThreadData->sampleArray);
-      }
-      analyzerThreadData->fillNewSamples = true;
+	  PIT_Disable(alarmControlThreadData->channelNb);
 
-    }
+	  if (alarmControlThreadData->alarmingHigh)
+	  {
+	    if (BeyondHighBound(RMS))
+	    {
+	      VoltageRaiseEvent();
+	      alarmControlThreadData->alarmingHigh = false;
+	    }
+
+	  }
+	  else if (alarmControlThreadData->alarmingLow)
+	  {
+	    if (BeyondLowBound(RMS))
+	    {
+	      VoltageLowerEvent();
+	      alarmControlThreadData->alarmingLow = false;
+	    }
+	  }
 
   }
+
+
 }
 
-// PIT_Update will be where PITs can be turned off
+uint32_t LinearlyInterpolate(const uint32_t ticksPerSample, const int32_t inCycleValue, const int32_t outOfCycleValue)
+{
+
+  int32_t sampleAmpChange = abs(inCycleValue) + abs(outOfCycleValue);
+  int32_t inCycleAmpChange = abs(inCycleValue - 0);
+  uint32_t partialSample = (uint32_t)(ticksPerSample * ((float)inCycleAmpChange / (float)sampleAmpChange));
+  return partialSample;
+}
+
+
+void SetNewSamplePeriod(const uint32_t ticksPerSample, const uint32_t surroundingCrossValues[4], uint8_t sampleCount)
+{
+  // calculate and interpolate freq (linear to start with)
+  uint32_t waveStart = LinearlyInterpolate(ticksPerSample, surroundingCrossValues[1], surroundingCrossValues[0]);
+  uint32_t waveEnd = LinearlyInterpolate(ticksPerSample, surroundingCrossValues[2], surroundingCrossValues[3]);
+
+  // store freq into passed freq param
+  uint32_t newSamplePeriod = waveStart + ((sampleCount - 1) * ticksPerSample) + waveEnd;
+
+  PIT_Set(newSamplePeriod, true, false);
+
+}
+
+void StoreNewFrequency(const float* currentFrequency)
+{
+
+}
+
+
+void UpdateFrequency(const uint32_t* sampleArray[SAMPLES_ARRAY_SIZE])
+{
+
+}
 
 // TODO: check whether we need to use floats
 void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
@@ -199,12 +232,12 @@ void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
   // wait on first value
   OS_SemaphoreWait(TrackingSemaphore, 0); // maybe drop out if an error
   // place first sample into previous for comparison
-  int32_t previousValue = analogSample;
+  int32_t previousValue = *analogSample;
   int32_t currentValue;
   while (crossCount < SAMPLER_WINDOW_CROSSES) // 3
   {
     OS_SemaphoreWait(TrackingSemaphore, 0);
-    currentValue = analogSample;
+    currentValue = *analogSample;
     // check for crossing and update crossing values and count
     if (PolarityChange(previousValue, currentValue))
     {
@@ -233,38 +266,55 @@ void FrequencyTracker(OS_ECB* TrackingSemaphore, int32_t* analogSample)
   StoreNewFrequency(&CurrentFrequency);
 }
 
-bool PolarityChange(int32_t firstValue, int32_t secondValue)
+// consider 3 threads for this one rather than one as it will be less messy
+void AnalyzerThread(void* pData)
 {
-  bool firstStatePos = firstValue > 0;
-  bool secondStatePos = secondValue > 0;
-  return (firstStatePos != secondStatePos);
-}
+  #define analyzerThreadData ((TAnalyzerThreadData*)pData)
 
-uint32_t LinearlyInterpolate(const uint32_t ticksPerSample, const int32_t inCycleValue, const int32_t outOfCycleValue)
-{
+  for (;;)
+  {
+    // wait on samplesReady semaphore
+    OS_SemaphoreWait(analyzerThreadData->SamplerFullSemaphore, 0);
+    // start timer
+    OS_TimeSet(0);
 
-  int32_t sampleAmpChange = abs(inCycleValue) + abs(outOfCycleValue);
-  int32_t inCycleAmpChange = abs(inCycleValue - 0);
-  uint32_t partialSample = (uint32_t)(ticksPerSample * ((float)inCycleAmpChange / (float)sampleAmpChange));
-  return partialSample;
-}
+    for (;;)
+    {
+      // get crosses
+      uint8_t crossPositions[SAMPLER_WINDOW_CROSSES];
+      uint8_t crossesCount;
+      for (uint8_t iterator = 1; iterator < SAMPLES_ARRAY_SIZE; iterator++)
+      {
+        int32_t previous = analyzerThreadData->sampleArray[iterator-1];
+        int32_t current = analyzerThreadData->sampleArray[iterator];
+        if (PolarityChange(previous, current))
+        {
+          crossPositions[crossesCount++] = iterator;
+          if (crossesCount == 3)
+            break;
+        }
+      }
+      // if window size is incorrect
+      if (!(crossesCount == 3 && (crossPositions[2] - crossPositions[0]) >= 15))
+      {
+        // while this is a long process, there is no point servicing any interrupts until frequency is matched
+        OS_DisableInterrupts();
+        PIT_Disable(analyzerThreadData->channelNb);
+        FrequencyTracker(analyzerThreadData->FrequencyTrackerSemaphore, analyzerThreadData->analogSample);
+        OS_EnableInterrupts();
+      }
+      //
+      else
+      {
+        SetRMS(analyzerThreadData->sampleArray, analyzerThreadData->AlarmMonitoringData->RMS);
+        AlarmMonitoring(&analyzerThreadData->AlarmMonitoringData);
+        UpdateFrequency(&analyzerThreadData->sampleArray);
+      }
+      analyzerThreadData->fillNewSamples = true;
 
-void SetNewSamplePeriod(const uint32_t ticksPerSample, const uint32_t surroundingCrossValues[4], uint8_t sampleCount)
-{
-  // calculate and interpolate freq (linear to start with)
-  uint32_t waveStart = LinearlyInterpolate(ticksPerSample, surroundingCrossValues[1], surroundingCrossValues[0]);
-  uint32_t waveEnd = LinearlyInterpolate(ticksPerSample, surroundingCrossValues[2], surroundingCrossValues[3]);
+    }
 
-  // store freq into passed freq param
-  uint32_t newSamplePeriod = waveStart + ((sampleCount - 1) * ticksPerSample) + waveEnd;
-
-  PIT_Set(newSamplePeriod, true, false);
-
-}
-
-void StoreNewFrequency(const float* currentFrequency)
-{
-
+  }
 }
 
 void PassSampleThread(void* pData)
@@ -281,73 +331,35 @@ void PassSampleThread(void* pData)
     OS_DisableInterrupts();
     for (int channelNb = 0; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
     {
-      if (passSampleData->PassSampleChannelData[channelNb].analyzerReady)
+      if (passSampleData->PassSampleChannelData[channelNb]->analyzerReady)
       {
-        passSampleData->PassSampleChannelData[channelNb]->sampleArray[fillCounter]
-                                                                      = passSampleData->PassSampleChannelData[channelNb]->analogSample;
+        // passSampleData->PassSampleChannelData[channelNb]->sampleArray[fillCounter] = passSampleData->PassSampleChannelData[channelNb]->analogSample;
+        passSampleData->PassSampleChannelData[channelNb]->sampleArray[fillCounter] = 1;
       }
     }
     OS_EnableInterrupts();
-    for (int channelNb = 0; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
-    {
-      if (passSampleData->PassSampleChannelData[channelNb].fillNewSamples)
-      {
-        fillCounter++;
-        if (fillCounter == SAMPLES_ARRAY_SIZE)
-        {
-          passSampleData->PassSampleChannelData[channelNb].fillNewSamples = false;
-          fillCounter = 0;
-        }
-      }
-      if (passSampleData->PassSampleChannelData[channelNb].analyzerReady)
-      {
-        // start timer - use an array that stores multiple timers
-        OS_TimerStart(0);
-        OS_SemaphoreSignal(passSampleData->PassSampleChannelData[channelNb].SamplerFullSemaphore);
-      }
-
-    }
-
-  }
-
-  for (;;)
-  {
-    // wait on TimerCompleteSemaphore
-    OS_SemaphoreWait(passSampleData->PITDataSampleTakenSemaphore, 0);
-    // store pointer into array asap
-    OS_DisableInterrupts();
-    for (int channelNb = 0; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
-    {
-      // pass storage data
-      // if last sample of array is full
-        // raise AnalyzeSamplesSemaphore
-      passSampleData->PassSampleChannelData[channelNb]->sampleArray[passSampleData->PassSampleChannelData[channelNb]->iterator++] = passSampleData->PassSampleChannelData[channelNb]->analogSample;
-    }
-    OS_EnableInterrupts();
-    // perform array maintenance
-    for (int channelNb = 0; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
-    {
-
-      if (passSampleData->PassSampleChannelData[channelNb]->iterator == SAMPLES_ARRAY_SIZE)
-        passSampleData->PassSampleChannelData[channelNb]->iterator = 0;
-
-      if (passSampleData->PassSampleChannelData[channelNb]->fillNewSamples && passSampleData->PassSampleChannelData[channelNb]->sampleArray[SAMPLES_ARRAY_SIZE - 1] != NULL) // may need to iterate through
-      {
-        passSampleData->PassSampleChannelData[channelNb]->fillNewSamples = false;
-      }
-    }
-    // if analyzerReady bool and samplerFull bool
-      // raise the SamplesReady semaphore
-
-    // raise semaphores all at once
     for (int channelNb = 0; channelNb < NB_SAMPLER_CHANNELS; channelNb++)
     {
       if (passSampleData->PassSampleChannelData[channelNb]->fillNewSamples)
       {
+        fillCounter++;
+        if (fillCounter == SAMPLES_ARRAY_SIZE)
+        {
+          passSampleData->PassSampleChannelData[channelNb]->fillNewSamples = false;
+          fillCounter = 0;
+        }
+      }
+      if (passSampleData->PassSampleChannelData[channelNb]->analyzerReady)
+      {
+        // start timer - use an array that stores multiple timers
+	    OS_TimeSet(0);
         OS_SemaphoreSignal(passSampleData->PassSampleChannelData[channelNb]->SamplerFullSemaphore);
       }
+
     }
+
   }
+
 }
 
 void setTimingMode(const bool inverse)
